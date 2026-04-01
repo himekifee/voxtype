@@ -77,6 +77,58 @@
 
             <!-- v0.6.x Era Posts -->
 
+            <article class="news-article" id="v065">
+                <div class="article-meta">
+                    <time datetime="2026-03-31">March 31, 2026</time>
+                    <span class="article-tag">Release</span>
+                </div>
+                <h2>v0.6.5: Eager Processing, Multi-GPU Device Selection, Parakeet TDT English-Only Models</h2>
+                <div class="article-body">
+                    <p>Voxtype 0.6.5 adds real-time transcription during recording, fixes a performance regression on multi-GPU systems, and brings new English-only Parakeet models. If you have both an integrated and discrete GPU, the <code>gpu_device</code> option gives you direct control over which one runs inference.</p>
+
+                    <h3>Eager Processing</h3>
+                    <p>Voxtype can now transcribe audio chunks while you are still recording. Instead of waiting until you release the hotkey and then processing all the audio at once, eager mode splits your recording into overlapping chunks and transcribes them in parallel. When you stop recording, the partial results are combined into the final output.</p>
+
+                    <p><strong>Why use it:</strong> On slower CPUs where transcription takes several seconds, eager processing reduces the wait after you stop speaking. On fast systems with GPU acceleration, the difference is negligible.</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[whisper]
+eager_processing = true
+eager_chunk_secs = 5.0       # Chunk size (seconds)
+eager_overlap_secs = 0.5     # Overlap to avoid losing words at boundaries</code></pre>
+                    </div>
+
+                    <p>Per-recording overrides work too: <code>voxtype --eager-processing record start</code></p>
+
+                    <h3>Multi-GPU Device Selection</h3>
+                    <p>whisper-rs 0.16.0 began enumerating integrated GPUs via Vulkan, which gave them priority over discrete GPUs. On systems with both (common on laptops and hybrid desktops), this caused transcription to run on the integrated GPU at roughly 3x slower speeds with no obvious indication.</p>
+
+                    <p>The new <code>gpu_device</code> option lets you specify the exact GPU device index for whisper.cpp:</p>
+
+                    <div class="code-block">
+                        <div class="code-header"><span>config.toml</span></div>
+                        <pre><code>[whisper]
+gpu_device = 1    # Use device index 1 (your discrete GPU)</code></pre>
+                    </div>
+
+                    <p>Also available as <code>--gpu-device 1</code> on the CLI or <code>VOXTYPE_GPU_DEVICE=1</code> as an environment variable. Use <code>voxtype setup gpu</code> or <code>vulkaninfo --summary</code> to find your device indices.</p>
+
+                    <p>This complements the existing <code>VOXTYPE_VULKAN_DEVICE</code> env var, which filters by vendor name ("amd", "nvidia", "intel"). Use <code>gpu_device</code> when you need precise index control, especially with same-vendor multi-GPU setups.</p>
+
+                    <h3>Parakeet TDT English-Only Models</h3>
+                    <p>Two new Parakeet model options for English-only transcription:</p>
+                    <ul>
+                        <li><strong>parakeet-tdt-0.6b-v2</strong> (2.4 GB): Full-precision TDT model with best English accuracy</li>
+                        <li><strong>parakeet-tdt-0.6b-v2-int8</strong> (640 MB): Quantized variant, about 20% faster and 75% smaller at the cost of minor accuracy</li>
+                    </ul>
+                    <p>Select them via <code>voxtype setup model</code>. These are alternatives to the existing v3 models, which have better punctuation but are multilingual.</p>
+
+                    <h3>Contributors</h3>
+                    <p>Thanks to <a href="https://github.com/sjawhar">Sami Jawhar</a> for wiring eager processing into the daemon, <a href="https://github.com/rinormaloku">Rinor Maloku</a> for the Parakeet TDT English-only model definitions, and <a href="https://github.com/DuskyElf">jan Lemata (DuskyElf)</a> for the multi-GPU device selection.</p>
+                </div>
+            </article>
+
             <article class="news-article" id="v064">
                 <div class="article-meta">
                     <time datetime="2026-03-19">March 19, 2026</time>
