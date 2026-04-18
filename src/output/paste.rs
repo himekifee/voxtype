@@ -11,6 +11,7 @@
 
 use super::TextOutput;
 use crate::error::OutputError;
+use crate::output::find_ydotool_socket;
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -538,8 +539,11 @@ impl PasteOutput {
         }
 
         // Check if ydotoold is running by trying a no-op
-        Command::new("ydotool")
-            .args(["type", ""])
+        let mut cmd = Command::new("ydotool");
+        if let Some(socket) = find_ydotool_socket() {
+            cmd.env("YDOTOOL_SOCKET", socket);
+        }
+        cmd.args(["type", ""])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -591,6 +595,9 @@ impl PasteOutput {
         );
 
         let mut cmd = Command::new("ydotool");
+        if let Some(socket) = find_ydotool_socket() {
+            cmd.env("YDOTOOL_SOCKET", socket);
+        }
         cmd.arg("key");
 
         // Only add delay parameter if configured
@@ -681,7 +688,11 @@ impl PasteOutput {
 
         // Fall back to ydotool
         if self.is_ydotool_available().await {
-            let output = Command::new("ydotool")
+            let mut cmd = Command::new("ydotool");
+            if let Some(socket) = find_ydotool_socket() {
+                cmd.env("YDOTOOL_SOCKET", socket);
+            }
+            let output = cmd
                 .args(["key", "28:1", "28:0"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())

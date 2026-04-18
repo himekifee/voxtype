@@ -10,6 +10,8 @@
 
 use super::TextOutput;
 use crate::error::OutputError;
+use crate::output::find_ydotool_socket;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
@@ -28,6 +30,8 @@ pub struct YdotoolOutput {
     auto_submit: bool,
     /// Text to append after transcription (before auto_submit)
     append_text: Option<String>,
+    /// Path to ydotoold socket, if found at a non-default location
+    socket_path: Option<PathBuf>,
 }
 
 impl YdotoolOutput {
@@ -47,6 +51,7 @@ impl YdotoolOutput {
         } else {
             tracing::debug!("ydotool does not support --key-hold flag, using --key-delay only");
         }
+        let socket_path = find_ydotool_socket();
         Self {
             type_delay_ms,
             pre_type_delay_ms,
@@ -54,6 +59,14 @@ impl YdotoolOutput {
             supports_key_hold,
             auto_submit,
             append_text,
+            socket_path,
+        }
+    }
+
+    /// Apply the discovered socket path to a ydotool Command, if any.
+    fn apply_socket_env(&self, cmd: &mut Command) {
+        if let Some(ref path) = self.socket_path {
+            cmd.env("YDOTOOL_SOCKET", path);
         }
     }
 
@@ -114,6 +127,7 @@ impl TextOutput for YdotoolOutput {
         }
 
         let mut cmd = Command::new("ydotool");
+        self.apply_socket_env(&mut cmd);
         cmd.arg("type");
 
         // Always set delay explicitly (ydotool defaults to 12ms if not specified)
@@ -166,6 +180,7 @@ impl TextOutput for YdotoolOutput {
         // Append text if configured (e.g., a space to separate sentences)
         if let Some(ref append) = self.append_text {
             let mut append_cmd = Command::new("ydotool");
+            self.apply_socket_env(&mut append_cmd);
             append_cmd.arg("type");
             append_cmd
                 .arg("--key-delay")
@@ -196,7 +211,9 @@ impl TextOutput for YdotoolOutput {
         // ydotool key uses evdev key codes: 28 is KEY_ENTER
         // Format: keycode:press (1) then keycode:release (0)
         if self.auto_submit {
-            let enter_output = Command::new("ydotool")
+            let mut enter_cmd = Command::new("ydotool");
+            self.apply_socket_env(&mut enter_cmd);
+            let enter_output = enter_cmd
                 .args(["key", "28:1", "28:0"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
@@ -235,8 +252,9 @@ impl TextOutput for YdotoolOutput {
 
         // Check if ydotoold is running by trying a no-op
         // ydotool type "" should succeed quickly if daemon is running
-        Command::new("ydotool")
-            .args(["type", ""])
+        let mut cmd = Command::new("ydotool");
+        self.apply_socket_env(&mut cmd);
+        cmd.args(["type", ""])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
