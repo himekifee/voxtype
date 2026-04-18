@@ -191,6 +191,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(gpu_device) = cli.gpu_device {
         config.whisper.gpu_device = Some(gpu_device);
     }
+    if cli.flash_attention {
+        config.whisper.flash_attention = true;
+    }
     if cli.on_demand_loading {
         config.whisper.on_demand_loading = true;
     }

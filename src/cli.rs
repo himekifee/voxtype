@@ -123,6 +123,10 @@ pub struct Cli {
     #[arg(long, value_name = "INDEX", help_heading = "Whisper")]
     pub gpu_device: Option<i32>,
 
+    /// Enable flash attention for reduced GPU memory usage and faster inference
+    #[arg(long, help_heading = "Whisper")]
+    pub flash_attention: bool,
+
     /// Load model on-demand when recording starts instead of keeping it loaded
     #[arg(long, help_heading = "Whisper")]
     pub on_demand_loading: bool,

@@ -106,6 +106,10 @@ translate = false
 # Use gpu_device for same-vendor GPUs or precise index control.
 # gpu_device = 1
 
+# Enable flash attention for GPU inference (default: false)
+# Reduces memory usage (~75%) and improves speed (~10%) on CUDA/Vulkan.
+# flash_attention = false
+
 # Initial prompt to provide context for transcription
 # Use this to hint at terminology, proper nouns, or formatting conventions.
 # Example: "Technical discussion about Rust, TypeScript, and Kubernetes."
@@ -2056,6 +2060,9 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
         if let Ok(n) = val.parse::<i32>() {
             config.whisper.gpu_device = Some(n);
         }
+    }
+    if let Ok(val) = std::env::var("VOXTYPE_FLASH_ATTENTION") {
+        config.whisper.flash_attention = parse_bool_env(&val);
     }
     if let Ok(val) = std::env::var("VOXTYPE_ON_DEMAND_LOADING") {
         config.whisper.on_demand_loading = parse_bool_env(&val);
