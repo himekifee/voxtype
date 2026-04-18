@@ -288,9 +288,11 @@ mod tests {
         assert_eq!(result, "context:unset stdin:current text");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn test_context_env_not_inherited_from_parent() {
-        // Even if VOXTYPE_CONTEXT is set in parent env, it should be cleared when context is None
+        // Even if VOXTYPE_CONTEXT is set in parent env, it should be cleared when context is None.
+        // Uses current_thread runtime because std::env::set_var is not thread-safe
+        // and will become unsafe in Rust edition 2024.
         std::env::set_var("VOXTYPE_CONTEXT", "stale parent context");
         let config = make_config("echo \"${VOXTYPE_CONTEXT:-unset}\"", 5000);
         let processor = PostProcessor::new(&config);

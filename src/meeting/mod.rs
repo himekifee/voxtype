@@ -312,8 +312,9 @@ impl MeetingDaemon {
                         .await;
                 }
             }
-            // Update context for next chunk (per source)
-            if let Some(last_seg) = result.segments.last() {
+            // Update context for next chunk (per source), using the last non-empty
+            // segment to avoid losing useful context when a chunk ends with silence
+            if let Some(last_seg) = result.segments.iter().rfind(|s| !s.text.is_empty()) {
                 self.last_chunk_text
                     .insert(source, last_seg.text.clone());
             }
