@@ -84,6 +84,12 @@ pub fn get_voxtype_path() -> String {
 /// so backend switching only requires a service restart rather than regenerating
 /// the service file.
 pub fn get_voxtype_service_path() -> String {
+    // AppImage: use the .AppImage file path directly
+    // The APPIMAGE env var is set automatically by the AppImage runtime
+    if let Ok(appimage_path) = std::env::var("APPIMAGE") {
+        return appimage_path;
+    }
+
     const VOXTYPE_BIN: &str = "/usr/bin/voxtype";
 
     // If /usr/bin/voxtype exists (either as symlink or binary), use it

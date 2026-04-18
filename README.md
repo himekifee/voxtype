@@ -478,6 +478,28 @@ ONNX engines require the corresponding Cargo feature at build time. Without it, 
 `engine = "parakeet"` in your config will fail with an error. The prebuilt release binaries
 (`-onnx-avx2`, `-onnx-cuda`, etc.) include all ONNX engines.
 
+## AppImage (Universal)
+
+AppImage works on any Linux distribution without installation:
+
+```bash
+# Download the appropriate AppImage from the GitHub release
+chmod +x voxtype-*-x86_64.AppImage
+
+# Move to a permanent location
+mv voxtype-*-x86_64.AppImage ~/.local/bin/voxtype
+
+# Run setup (downloads model, configures service)
+~/.local/bin/voxtype setup
+```
+
+Available AppImage variants:
+- `voxtype-{ver}-x86_64.AppImage` - CPU, Whisper engine (recommended)
+- `voxtype-{ver}-vulkan-x86_64.AppImage` - GPU via Vulkan (Whisper)
+- `voxtype-{ver}-onnx-x86_64.AppImage` - CPU, ONNX engines (Parakeet, Moonshine, etc.)
+- `voxtype-{ver}-onnx-cuda-x86_64.AppImage` - NVIDIA GPU, ONNX engines
+- `voxtype-{ver}-onnx-rocm-x86_64.AppImage` - AMD GPU, ONNX engines
+
 ## Waybar Integration
 
 Add to your Waybar config:
