@@ -60,6 +60,10 @@ sample_rate = 16000
 # Maximum recording duration in seconds (safety limit)
 max_duration_secs = 60
 
+# Pause MPRIS media players (Spotify, Firefox, etc.) when recording starts,
+# resume them when recording stops. Requires playerctl.
+# pause_media = false
+
 # [audio.feedback]
 # Enable audio feedback sounds (beeps when recording starts/stops)
 # enabled = true
@@ -424,6 +428,10 @@ pub struct AudioConfig {
 
     /// Maximum recording duration in seconds (safety limit)
     pub max_duration_secs: u32,
+
+    /// Pause MPRIS media players during recording and resume on stop
+    #[serde(default)]
+    pub pause_media: bool,
 
     /// Audio feedback settings
     #[serde(default)]
@@ -1777,6 +1785,7 @@ impl Default for Config {
                 device: "default".to_string(),
                 sample_rate: 16000,
                 max_duration_secs: 60,
+                pause_media: false,
                 feedback: AudioFeedbackConfig::default(),
             },
             whisper: WhisperConfig {
@@ -2089,6 +2098,9 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
     }
     if let Ok(val) = std::env::var("VOXTYPE_AUDIO_FEEDBACK") {
         config.audio.feedback.enabled = parse_bool_env(&val);
+    }
+    if let Ok(val) = std::env::var("VOXTYPE_PAUSE_MEDIA") {
+        config.audio.pause_media = parse_bool_env(&val);
     }
 
     // Output
