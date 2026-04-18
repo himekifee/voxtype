@@ -188,6 +188,11 @@ pub struct Cli {
     #[arg(long, value_name = "TEXT", help_heading = "Output")]
     pub append_text: Option<String>,
 
+    /// Prefix wtype output with a Shift key press/release.
+    /// Workaround for apps (e.g., Discord) that drop the first CJK character.
+    #[arg(long)]
+    pub wtype_shift_prefix: bool,
+
     /// Output driver order for type mode (comma-separated).
     /// Available: wtype, dotool, ydotool, clipboard.
     /// Example: --driver=ydotool,wtype,clipboard

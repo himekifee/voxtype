@@ -192,6 +192,10 @@ type_delay_ms = 0
 # Useful for applications where Enter submits (e.g., Cursor IDE, Slack, Discord)
 # shift_enter_newlines = false
 
+# Prefix wtype output with a Shift key press/release
+# Workaround for apps (e.g., Discord) that drop the first CJK character
+# wtype_shift_prefix = false
+
 # Restore clipboard content after paste mode (default: false)
 # Saves clipboard before transcription, restores it after paste keystroke
 # Only applies to mode = "paste". Useful when you want to preserve your
@@ -1594,6 +1598,11 @@ pub struct OutputConfig {
     #[serde(default)]
     pub shift_enter_newlines: bool,
 
+    /// Prefix wtype output with a Shift key press/release
+    /// Workaround for apps (e.g., Discord) that drop the first CJK character
+    #[serde(default)]
+    pub wtype_shift_prefix: bool,
+
     /// Command to run when recording starts (e.g., switch to compositor submap)
     /// Useful for entering a mode where cancel keybindings are effective
     #[serde(default)]
@@ -1807,6 +1816,7 @@ impl Default for Config {
                 auto_submit: false,
                 append_text: None,
                 shift_enter_newlines: false,
+                wtype_shift_prefix: false,
                 pre_recording_command: None,
                 pre_output_command: None,
                 post_output_command: None,
@@ -2092,6 +2102,12 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
     }
     if let Ok(append_text) = std::env::var("VOXTYPE_APPEND_TEXT") {
         config.output.append_text = Some(append_text);
+    }
+    if std::env::var("VOXTYPE_WTYPE_SHIFT_PREFIX")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        config.output.wtype_shift_prefix = true;
     }
     if let Ok(val) = std::env::var("VOXTYPE_AUTO_SUBMIT") {
         config.output.auto_submit = parse_bool_env(&val);
