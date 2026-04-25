@@ -11,6 +11,8 @@ use super::Transcriber;
 use crate::config::{GeminiThinkingLevel, LanguageConfig, RemoteProvider, WhisperConfig};
 use crate::error::TranscribeError;
 use base64::{engine::general_purpose, Engine as _};
+use chrono::{DateTime, Utc};
+use std::cmp;
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
@@ -19,6 +21,10 @@ use std::time::Duration;
 use ureq::serde_json;
 
 const REMOTE_SAMPLE_RATE_HZ: u32 = 16_000;
+const DEFAULT_REMOTE_RETRY_COUNT: u32 = 3;
+const REMOTE_RETRY_INITIAL_DELAY: Duration = Duration::from_secs(1);
+const REMOTE_RETRY_MAX_DELAY: Duration = Duration::from_secs(30);
+const REMOTE_RETRY_LOG_BODY_LIMIT: usize = 240;
 const GEMINI_MP3_MIME_TYPE: &str = "audio/mp3";
 const GEMINI_WAV_MIME_TYPE: &str = "audio/wav";
 const GEMINI_MP3_BITRATE_FFMPEG: &str = "32k";
@@ -28,6 +34,81 @@ struct GeminiAudioPayload {
     data: Vec<u8>,
     mime_type: &'static str,
     format_name: &'static str,
+}
+
+#[derive(Debug)]
+enum RemoteRequestFailure {
+    Status {
+        code: u16,
+        body: String,
+        retry_after: Option<Duration>,
+    },
+    Transport {
+        kind: ureq::ErrorKind,
+        message: String,
+    },
+}
+
+impl RemoteRequestFailure {
+    fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::Status { retry_after, .. } => *retry_after,
+            Self::Transport { .. } => None,
+        }
+    }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Status { code, .. } => RemoteTranscriber::is_retryable_status(*code),
+            Self::Transport { kind, .. } => RemoteTranscriber::is_retryable_transport(*kind),
+        }
+    }
+
+    fn summary(&self) -> String {
+        match self {
+            Self::Status { code, body, .. } => {
+                let trimmed = body.trim();
+                if trimmed.is_empty() {
+                    format!("HTTP {}", code)
+                } else {
+                    format!(
+                        "HTTP {}: {}",
+                        code,
+                        RemoteTranscriber::truncate_for_retry_log(
+                            &RemoteTranscriber::sanitize_error_message(trimmed)
+                        )
+                    )
+                }
+            }
+            Self::Transport { kind, message } => format!(
+                "transport error ({:?}): {}",
+                kind,
+                RemoteTranscriber::truncate_for_retry_log(message)
+            ),
+        }
+    }
+
+    fn into_transcribe_error(self, provider: RemoteProvider) -> TranscribeError {
+        match self {
+            Self::Status { code, body, .. } => match provider {
+                RemoteProvider::Gemini => TranscribeError::RemoteError(format!(
+                    "Gemini server returned {}: {}",
+                    code, body
+                )),
+                RemoteProvider::OpenAi => {
+                    TranscribeError::RemoteError(format!("Server returned {}: {}", code, body))
+                }
+            },
+            Self::Transport { message, .. } => match provider {
+                RemoteProvider::Gemini => {
+                    TranscribeError::NetworkError(format!("Gemini request failed: {}", message))
+                }
+                RemoteProvider::OpenAi => {
+                    TranscribeError::NetworkError(format!("Request failed: {}", message))
+                }
+            },
+        }
+    }
 }
 
 /// Remote transcriber using OpenAI-compatible Whisper API or Gemini API
@@ -49,6 +130,8 @@ pub struct RemoteTranscriber {
     gemini_thinking_level: Option<GeminiThinkingLevel>,
     /// Request timeout
     timeout: Duration,
+    /// Retry attempts for transient remote failures
+    retry_count: u32,
     /// Remote API provider
     provider: RemoteProvider,
 }
@@ -103,6 +186,9 @@ impl RemoteTranscriber {
             });
 
         let timeout = Duration::from_secs(config.remote_timeout_secs.unwrap_or(30));
+        let retry_count = config
+            .remote_retry_count
+            .unwrap_or(DEFAULT_REMOTE_RETRY_COUNT);
 
         // Warn if language array is configured (remote APIs don't support arrays)
         if config.language.is_multiple() {
@@ -114,11 +200,12 @@ impl RemoteTranscriber {
         }
 
         tracing::info!(
-            "Configured remote transcriber: endpoint={}, model={}, provider={:?}, timeout={}s",
+            "Configured remote transcriber: endpoint={}, model={}, provider={:?}, timeout={}s, retries={}",
             endpoint,
             model,
             provider,
-            timeout.as_secs()
+            timeout.as_secs(),
+            retry_count
         );
 
         let initial_prompt = config
@@ -136,8 +223,169 @@ impl RemoteTranscriber {
             initial_prompt,
             gemini_thinking_level: config.gemini_thinking_level,
             timeout,
+            retry_count,
             provider,
         })
+    }
+
+    fn remote_failure_from_ureq(error: ureq::Error) -> RemoteRequestFailure {
+        match error {
+            ureq::Error::Status(code, response) => {
+                let retry_after = response
+                    .header("Retry-After")
+                    .and_then(Self::parse_retry_after);
+                let body = response.into_string().unwrap_or_default();
+                RemoteRequestFailure::Status {
+                    code,
+                    body,
+                    retry_after,
+                }
+            }
+            ureq::Error::Transport(transport) => RemoteRequestFailure::Transport {
+                kind: transport.kind(),
+                message: Self::sanitize_error_message(&transport.to_string()),
+            },
+        }
+    }
+
+    fn sanitize_error_message(message: &str) -> String {
+        let mut sanitized = String::with_capacity(message.len());
+        let mut remaining = message;
+
+        while let Some(relative_start) = Self::find_key_param(remaining) {
+            sanitized.push_str(&remaining[..relative_start]);
+            sanitized.push_str("key=[REDACTED]");
+
+            let value_start = relative_start + "key=".len();
+            let value = &remaining[value_start..];
+            let value_end = value
+                .find(|c: char| c == '&' || c == '#' || c == ':' || c.is_whitespace())
+                .unwrap_or(value.len());
+            remaining = &value[value_end..];
+        }
+
+        sanitized.push_str(remaining);
+        sanitized
+    }
+
+    fn find_key_param(message: &str) -> Option<usize> {
+        let mut search_from = 0;
+
+        while let Some(relative_index) = message[search_from..].find("key=") {
+            let index = search_from + relative_index;
+            let is_param_boundary = index == 0
+                || message[..index]
+                    .chars()
+                    .next_back()
+                    .map(|c| c == '?' || c == '&' || c.is_whitespace())
+                    .unwrap_or(false);
+
+            if is_param_boundary {
+                return Some(index);
+            }
+
+            search_from = index + "key=".len();
+        }
+
+        None
+    }
+
+    fn truncate_for_retry_log(message: &str) -> String {
+        let mut chars = message.chars();
+        let truncated: String = chars.by_ref().take(REMOTE_RETRY_LOG_BODY_LIMIT).collect();
+
+        if chars.next().is_some() {
+            format!("{}...", truncated)
+        } else {
+            truncated
+        }
+    }
+
+    fn parse_retry_after(value: &str) -> Option<Duration> {
+        let trimmed = value.trim();
+        if let Ok(seconds) = trimmed.parse::<u64>() {
+            return Some(Duration::from_secs(seconds));
+        }
+
+        DateTime::parse_from_rfc2822(trimmed)
+            .ok()
+            .and_then(|retry_at| {
+                retry_at
+                    .with_timezone(&Utc)
+                    .signed_duration_since(Utc::now())
+                    .to_std()
+                    .ok()
+            })
+    }
+
+    fn is_retryable_status(code: u16) -> bool {
+        matches!(code, 408 | 429 | 500 | 502 | 503 | 504)
+    }
+
+    fn is_retryable_transport(kind: ureq::ErrorKind) -> bool {
+        matches!(
+            kind,
+            ureq::ErrorKind::Dns
+                | ureq::ErrorKind::ConnectionFailed
+                | ureq::ErrorKind::Io
+                | ureq::ErrorKind::ProxyConnect
+        )
+    }
+
+    fn retry_delay(failed_attempt_index: u32, retry_after: Option<Duration>) -> Duration {
+        let shift = failed_attempt_index.min(30);
+        let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+        let exponential = REMOTE_RETRY_INITIAL_DELAY.saturating_mul(multiplier as u32);
+        let delay = retry_after.unwrap_or(exponential);
+        cmp::min(delay, REMOTE_RETRY_MAX_DELAY)
+    }
+
+    fn send_remote_request_with_retries<F>(
+        &self,
+        operation: &str,
+        send: F,
+    ) -> Result<ureq::Response, TranscribeError>
+    where
+        F: FnMut() -> Result<ureq::Response, Box<ureq::Error>>,
+    {
+        self.send_remote_request_with_retries_and_sleep(operation, send, std::thread::sleep)
+    }
+
+    fn send_remote_request_with_retries_and_sleep<F, S>(
+        &self,
+        operation: &str,
+        mut send: F,
+        mut sleep: S,
+    ) -> Result<ureq::Response, TranscribeError>
+    where
+        F: FnMut() -> Result<ureq::Response, Box<ureq::Error>>,
+        S: FnMut(Duration),
+    {
+        for failed_attempts in 0..=self.retry_count {
+            match send() {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let failure = Self::remote_failure_from_ureq(*error);
+                    if failed_attempts >= self.retry_count || !failure.is_retryable() {
+                        return Err(failure.into_transcribe_error(self.provider));
+                    }
+
+                    let delay = Self::retry_delay(failed_attempts, failure.retry_after());
+                    let summary = failure.summary();
+                    tracing::warn!(
+                        operation,
+                        attempt = failed_attempts + 1,
+                        max_retries = self.retry_count,
+                        delay_ms = delay.as_millis(),
+                        error = %summary,
+                        "Transient remote request failure; retrying with exponential backoff"
+                    );
+                    sleep(delay);
+                }
+            }
+        }
+
+        unreachable!("retry loop always returns on success or final failure")
     }
 
     /// Encode f32 samples to WAV format
@@ -488,26 +736,18 @@ impl RemoteTranscriber {
 
         let url = format!("{}{}", self.endpoint.trim_end_matches('/'), path);
 
-        // Build request
-        let mut request = ureq::post(&url).timeout(self.timeout).set(
-            "Content-Type",
-            &format!("multipart/form-data; boundary={}", boundary),
-        );
+        // Send request, retrying transient server/network failures.
+        let response = self.send_remote_request_with_retries("openai transcription", || {
+            let mut request = ureq::post(&url).timeout(self.timeout).set(
+                "Content-Type",
+                &format!("multipart/form-data; boundary={}", boundary),
+            );
 
-        // Add authorization if API key is configured
-        if let Some(ref key) = self.api_key {
-            request = request.set("Authorization", &format!("Bearer {}", key));
-        }
+            if let Some(ref key) = self.api_key {
+                request = request.set("Authorization", &format!("Bearer {}", key));
+            }
 
-        // Send request
-        let response = request.send_bytes(&body).map_err(|e| match e {
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                TranscribeError::RemoteError(format!("Server returned {}: {}", code, body))
-            }
-            ureq::Error::Transport(t) => {
-                TranscribeError::NetworkError(format!("Request failed: {}", t))
-            }
+            request.send_bytes(&body).map_err(Box::new)
         })?;
 
         // Parse JSON response
@@ -575,24 +815,15 @@ impl RemoteTranscriber {
 
         let body = self.build_gemini_request(&base64_audio, audio.mime_type);
 
-        let request = ureq::post(&url)
-            .timeout(self.timeout)
-            .set("Content-Type", "application/json");
+        let body_string = body.to_string();
 
-        let response = request
-            .send_string(&body.to_string())
-            .map_err(|e| match e {
-                ureq::Error::Status(code, resp) => {
-                    let body = resp.into_string().unwrap_or_default();
-                    TranscribeError::RemoteError(format!(
-                        "Gemini server returned {}: {}",
-                        code, body
-                    ))
-                }
-                ureq::Error::Transport(t) => {
-                    TranscribeError::NetworkError(format!("Gemini request failed: {}", t))
-                }
-            })?;
+        let response = self.send_remote_request_with_retries("gemini generateContent", || {
+            ureq::post(&url)
+                .timeout(self.timeout)
+                .set("Content-Type", "application/json")
+                .send_string(&body_string)
+                .map_err(Box::new)
+        })?;
 
         let json: serde_json::Value = response.into_json().map_err(|e| {
             TranscribeError::RemoteError(format!("Failed to parse Gemini response: {}", e))
@@ -839,6 +1070,290 @@ mod tests {
 
         let transcriber = RemoteTranscriber::new(&config).unwrap();
         assert_eq!(transcriber.timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_custom_retry_count() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("http://localhost:8080".to_string()),
+            remote_retry_count: Some(5),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        assert_eq!(transcriber.retry_count, 5);
+    }
+
+    #[test]
+    fn test_default_retry_count() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("http://localhost:8080".to_string()),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        assert_eq!(transcriber.retry_count, DEFAULT_REMOTE_RETRY_COUNT);
+    }
+
+    #[test]
+    fn test_retryable_status_classification() {
+        for code in [408, 429, 500, 502, 503, 504] {
+            assert!(
+                RemoteTranscriber::is_retryable_status(code),
+                "status {} should retry",
+                code
+            );
+        }
+
+        for code in [400, 401, 403, 404, 422] {
+            assert!(
+                !RemoteTranscriber::is_retryable_status(code),
+                "status {} should not retry",
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn test_retryable_transport_classification() {
+        for kind in [
+            ureq::ErrorKind::Dns,
+            ureq::ErrorKind::ConnectionFailed,
+            ureq::ErrorKind::Io,
+            ureq::ErrorKind::ProxyConnect,
+        ] {
+            assert!(
+                RemoteTranscriber::is_retryable_transport(kind),
+                "transport {:?} should retry",
+                kind
+            );
+        }
+
+        for kind in [
+            ureq::ErrorKind::InvalidUrl,
+            ureq::ErrorKind::UnknownScheme,
+            ureq::ErrorKind::InsecureRequestHttpsOnly,
+            ureq::ErrorKind::TooManyRedirects,
+            ureq::ErrorKind::BadStatus,
+            ureq::ErrorKind::BadHeader,
+            ureq::ErrorKind::InvalidProxyUrl,
+            ureq::ErrorKind::ProxyUnauthorized,
+        ] {
+            assert!(
+                !RemoteTranscriber::is_retryable_transport(kind),
+                "transport {:?} should not retry",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_sanitize_error_message_redacts_gemini_key() {
+        let sanitized = RemoteTranscriber::sanitize_error_message(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=secret-token: Connection Failed",
+        );
+
+        assert_eq!(
+            sanitized,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key=[REDACTED]: Connection Failed"
+        );
+        assert!(!sanitized.contains("secret-token"));
+    }
+
+    #[test]
+    fn test_sanitize_error_message_redacts_key_between_query_params() {
+        let sanitized = RemoteTranscriber::sanitize_error_message(
+            "https://example.test/path?alt=json&key=secret-token&pretty=false: Network Error",
+        );
+
+        assert_eq!(
+            sanitized,
+            "https://example.test/path?alt=json&key=[REDACTED]&pretty=false: Network Error"
+        );
+        assert!(!sanitized.contains("secret-token"));
+    }
+
+    #[test]
+    fn test_truncate_for_retry_log_limits_long_messages() {
+        let long_message = "x".repeat(REMOTE_RETRY_LOG_BODY_LIMIT + 10);
+        let truncated = RemoteTranscriber::truncate_for_retry_log(&long_message);
+
+        assert_eq!(truncated.chars().count(), REMOTE_RETRY_LOG_BODY_LIMIT + 3);
+        assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_remote_failure_summary_sanitizes_and_truncates_status_body() {
+        let body = format!(
+            "temporary failure for key=secret-token {}",
+            "x".repeat(REMOTE_RETRY_LOG_BODY_LIMIT)
+        );
+        let failure = RemoteRequestFailure::Status {
+            code: 503,
+            body,
+            retry_after: None,
+        };
+        let summary = failure.summary();
+
+        assert!(summary.starts_with("HTTP 503: temporary failure for key=[REDACTED]"));
+        assert!(summary.ends_with("..."));
+        assert!(!summary.contains("secret-token"));
+    }
+
+    #[test]
+    fn test_retry_after_seconds_parsing() {
+        assert_eq!(
+            RemoteTranscriber::parse_retry_after("7"),
+            Some(Duration::from_secs(7))
+        );
+    }
+
+    #[test]
+    fn test_send_remote_request_retries_503_then_succeeds() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("http://localhost:8080".to_string()),
+            remote_retry_count: Some(3),
+            ..Default::default()
+        };
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let mut attempts = 0;
+        let mut sleeps = Vec::new();
+
+        let response = transcriber
+            .send_remote_request_with_retries_and_sleep(
+                "test retry",
+                || {
+                    attempts += 1;
+                    if attempts == 1 {
+                        let response =
+                            ureq::Response::new(503, "Service Unavailable", "busy").unwrap();
+                        Err(Box::new(ureq::Error::Status(503, response)))
+                    } else {
+                        Ok(ureq::Response::new(200, "OK", "ok").unwrap())
+                    }
+                },
+                |delay| sleeps.push(delay),
+            )
+            .unwrap();
+
+        assert_eq!(attempts, 2);
+        assert_eq!(sleeps, vec![Duration::from_secs(1)]);
+        assert_eq!(response.status(), 200);
+    }
+
+    #[test]
+    fn test_send_remote_request_retry_count_zero_disables_retries() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("http://localhost:8080".to_string()),
+            remote_retry_count: Some(0),
+            ..Default::default()
+        };
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let mut attempts = 0;
+        let mut sleeps = Vec::new();
+
+        let error = transcriber
+            .send_remote_request_with_retries_and_sleep(
+                "test retry disabled",
+                || {
+                    attempts += 1;
+                    let response = ureq::Response::new(503, "Service Unavailable", "busy").unwrap();
+                    Err(Box::new(ureq::Error::Status(503, response)))
+                },
+                |delay| sleeps.push(delay),
+            )
+            .unwrap_err();
+
+        assert_eq!(attempts, 1);
+        assert!(sleeps.is_empty());
+        assert!(error.to_string().contains("Server returned 503"));
+    }
+
+    #[test]
+    fn test_send_remote_request_does_not_retry_non_retryable_status() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("http://localhost:8080".to_string()),
+            remote_retry_count: Some(3),
+            ..Default::default()
+        };
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let mut attempts = 0;
+        let mut sleeps = Vec::new();
+
+        let error = transcriber
+            .send_remote_request_with_retries_and_sleep(
+                "test non-retryable",
+                || {
+                    attempts += 1;
+                    let response = ureq::Response::new(401, "Unauthorized", "bad key").unwrap();
+                    Err(Box::new(ureq::Error::Status(401, response)))
+                },
+                |delay| sleeps.push(delay),
+            )
+            .unwrap_err();
+
+        assert_eq!(attempts, 1);
+        assert!(sleeps.is_empty());
+        assert!(error.to_string().contains("Server returned 401"));
+    }
+
+    #[test]
+    fn test_send_remote_request_retries_until_limit() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("http://localhost:8080".to_string()),
+            remote_retry_count: Some(2),
+            ..Default::default()
+        };
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let mut attempts = 0;
+        let mut sleeps = Vec::new();
+
+        let error = transcriber
+            .send_remote_request_with_retries_and_sleep(
+                "test retry limit",
+                || {
+                    attempts += 1;
+                    let response =
+                        ureq::Response::new(503, "Service Unavailable", "still busy").unwrap();
+                    Err(Box::new(ureq::Error::Status(503, response)))
+                },
+                |delay| sleeps.push(delay),
+            )
+            .unwrap_err();
+
+        assert_eq!(attempts, 3);
+        assert_eq!(sleeps, vec![Duration::from_secs(1), Duration::from_secs(2)]);
+        assert!(error.to_string().contains("Server returned 503"));
+    }
+
+    #[test]
+    fn test_retry_delay_uses_exponential_backoff_and_cap() {
+        assert_eq!(
+            RemoteTranscriber::retry_delay(0, None),
+            Duration::from_secs(1)
+        );
+        assert_eq!(
+            RemoteTranscriber::retry_delay(1, None),
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            RemoteTranscriber::retry_delay(5, None),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            RemoteTranscriber::retry_delay(0, Some(Duration::from_secs(9))),
+            Duration::from_secs(9)
+        );
+        assert_eq!(
+            RemoteTranscriber::retry_delay(0, Some(Duration::from_secs(90))),
+            REMOTE_RETRY_MAX_DELAY
+        );
     }
 
     #[test]

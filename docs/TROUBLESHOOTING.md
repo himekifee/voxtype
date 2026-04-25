@@ -476,6 +476,27 @@ These issues apply when using `remote_provider = "gemini"` in your config.
 2. Upgrade to a paid plan in Google AI Studio for higher limits
 3. Consider switching to a local model for high-frequency use
 
+Voxtype retries 429 responses with exponential backoff by default. If rate limits are frequent, you can tune the retry count:
+
+```toml
+[whisper]
+remote_retry_count = 5  # default: 3, set to 0 to disable retries
+```
+
+**Temporary high demand (503 errors)**
+
+**Cause:** Gemini can return `503 UNAVAILABLE` when the selected model is overloaded. This is usually temporary.
+
+**Solution:**
+1. Keep the default retry behavior enabled so Voxtype backs off and tries again
+2. Increase `remote_retry_count` if the model is often busy:
+   ```toml
+   [whisper]
+   remote_retry_count = 5
+   ```
+3. Try a less busy model, such as `gemini-2.0-flash`, if preview models are overloaded
+4. If you want immediate failures while testing, set `remote_retry_count = 0`
+
 ---
 
 ## Voice Activity Detection (VAD)

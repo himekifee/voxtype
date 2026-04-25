@@ -237,6 +237,9 @@ async fn main() -> anyhow::Result<()> {
     if let Some(key) = cli.remote_api_key {
         config.whisper.remote_api_key = Some(key);
     }
+    if let Some(retry_count) = cli.remote_retry_count {
+        config.whisper.remote_retry_count = Some(retry_count);
+    }
     if let Some(ref provider) = cli.remote_provider {
         match provider.to_lowercase().as_str() {
             "openai" => config.whisper.remote_provider = Some(config::RemoteProvider::OpenAi),

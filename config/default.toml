@@ -117,6 +117,7 @@ on_demand_loading = false
 # gemini_thinking_level = "minimal"               # Optional Gemini-only: minimal, low, medium, high
 # remote_api_key = ""                             # Prefer VOXTYPE_REMOTE_API_KEY instead of storing keys here
 # remote_timeout_secs = 30
+# remote_retry_count = 3                           # Retry transient failures with exponential backoff, 0 disables
 # When remote_provider = "gemini", voxtype sends mono 16 kHz MP3 when ffmpeg
 # or lame is installed, and falls back to WAV if no MP3 encoder is available.
 

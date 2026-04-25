@@ -1064,6 +1064,27 @@ remote_endpoint = "http://192.168.1.100:8080"
 remote_timeout_secs = 60  # 60 second timeout for long recordings
 ```
 
+### remote_retry_count
+
+**Type:** Integer
+**Default:** `3`
+**Required:** No
+
+Number of retry attempts for transient remote transcription failures. Retries use exponential backoff starting at 1 second and capped at 30 seconds. Voxtype retries temporary network failures, rate limits, request timeouts, and server errors such as 500, 502, 503, and 504. `Retry-After` headers are honored, but also capped at 30 seconds so a remote provider cannot block dictation for minutes. Voxtype does not retry permanent client errors such as invalid API keys or bad model names.
+
+Set this to `0` to disable retries.
+
+**Example:**
+```toml
+[whisper]
+mode = "remote"
+remote_provider = "gemini"
+remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+remote_retry_count = 5  # More patience for temporary Gemini overloads
+```
+
+You can also set it with `VOXTYPE_REMOTE_RETRY_COUNT` or `--remote-retry-count 5`.
+
 ### whisper_cli_path
 
 **Type:** String
@@ -2658,6 +2679,7 @@ Any config file setting can be overridden via environment variable. These are ap
 | `VOXTYPE_REMOTE_API_KEY` | string | `whisper.remote_api_key` |
 | `VOXTYPE_WHISPER_API_KEY` | string | `whisper.remote_api_key` |
 | `VOXTYPE_GEMINI_THINKING_LEVEL` | string | `whisper.gemini_thinking_level` |
+| `VOXTYPE_REMOTE_RETRY_COUNT` | integer | `whisper.remote_retry_count` |
 
 **Audio:**
 

@@ -198,6 +198,18 @@ pub struct Cli {
     )]
     pub remote_api_key: Option<String>,
 
+    /// Number of retry attempts for transient remote transcription failures
+    #[arg(
+        long,
+        value_name = "N",
+        help_heading = "Whisper",
+        hide_short_help = true,
+        long_help = "Number of retry attempts for transient remote transcription failures.\n\
+        Retries use exponential backoff for rate limits, temporary server errors, and network failures.\n\
+        Set to 0 to disable retries."
+    )]
+    pub remote_retry_count: Option<u32>,
+
     // -- Hotkey --
     /// Override hotkey (e.g., SCROLLLOCK, PAUSE, F13, MEDIA, WEV_234, EVTEST_226)
     #[arg(long, value_name = "KEY", help_heading = "Hotkey")]
@@ -2086,5 +2098,11 @@ mod tests {
     fn test_remote_api_key_flag() {
         let cli = Cli::parse_from(["voxtype", "--remote-api-key", "sk-test-123"]);
         assert_eq!(cli.remote_api_key, Some("sk-test-123".to_string()));
+    }
+
+    #[test]
+    fn test_remote_retry_count_flag() {
+        let cli = Cli::parse_from(["voxtype", "--remote-retry-count", "5"]);
+        assert_eq!(cli.remote_retry_count, Some(5));
     }
 }

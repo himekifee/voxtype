@@ -176,6 +176,9 @@ translate = false
 #
 # Timeout for remote requests in seconds (default: 30)
 # remote_timeout_secs = 30
+#
+# Retry transient remote failures with exponential backoff (default: 3, 0 = disabled)
+# remote_retry_count = 3
 
 [output]
 # Primary output mode: "type" or "clipboard"
@@ -961,6 +964,10 @@ pub struct WhisperConfig {
     #[serde(default)]
     pub remote_timeout_secs: Option<u64>,
 
+    /// Number of retry attempts for transient remote request failures (default: 3)
+    #[serde(default)]
+    pub remote_retry_count: Option<u32>,
+
     // --- CLI backend settings ---
     /// Path to whisper-cli binary (optional, searches PATH if not set)
     /// Used when mode = "cli"
@@ -1025,6 +1032,7 @@ impl Default for WhisperConfig {
             gemini_thinking_level: None,
             remote_api_key: None,
             remote_timeout_secs: None,
+            remote_retry_count: None,
             whisper_cli_path: None,
         }
     }
@@ -2015,6 +2023,7 @@ impl Default for Config {
                 gemini_thinking_level: None,
                 remote_api_key: None,
                 remote_timeout_secs: None,
+                remote_retry_count: None,
                 whisper_cli_path: None,
             },
             output: OutputConfig {
@@ -2400,6 +2409,11 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
     } else if let Ok(key) = std::env::var("VOXTYPE_WHISPER_API_KEY") {
         config.whisper.remote_api_key = Some(key);
     }
+    if let Ok(val) = std::env::var("VOXTYPE_REMOTE_RETRY_COUNT") {
+        if let Ok(n) = val.parse::<u32>() {
+            config.whisper.remote_retry_count = Some(n);
+        }
+    }
     if let Ok(val) = std::env::var("VOXTYPE_RESTORE_CLIPBOARD") {
         config.output.restore_clipboard = parse_bool_env(&val);
     }
@@ -2441,6 +2455,14 @@ mod tests {
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn missing_config_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "voxtype-test-missing-{}-{}.toml",
+            name,
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -4110,6 +4132,32 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_remote_retry_count() {
+        let toml_str = r#"
+            [hotkey]
+            key = "SCROLLLOCK"
+
+            [audio]
+            device = "default"
+            sample_rate = 16000
+            max_duration_secs = 60
+
+            [whisper]
+            model = "base.en"
+            language = "en"
+            remote_provider = "gemini"
+            remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+            remote_retry_count = 5
+
+            [output]
+            mode = "type"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.whisper.remote_retry_count, Some(5));
+    }
+
+    #[test]
     fn test_remote_provider_backward_compatible_omitted() {
         let toml_str = r#"
             [hotkey]
@@ -4141,7 +4189,7 @@ mod tests {
         std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
         std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
         std::env::set_var("VOXTYPE_REMOTE_PROVIDER", "gemini");
-        let config = load_config(None).unwrap();
+        let config = load_config(Some(&missing_config_path("remote-provider"))).unwrap();
         assert_eq!(config.whisper.remote_provider, Some(RemoteProvider::Gemini));
         std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
     }
@@ -4154,7 +4202,7 @@ mod tests {
         std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
         std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
         std::env::set_var("VOXTYPE_REMOTE_MODEL", "gemini-3-flash-preview");
-        let config = load_config(None).unwrap();
+        let config = load_config(Some(&missing_config_path("remote-model"))).unwrap();
         assert_eq!(
             config.whisper.remote_model,
             Some("gemini-3-flash-preview".to_string())
@@ -4170,12 +4218,26 @@ mod tests {
         std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
         std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
         std::env::set_var("VOXTYPE_GEMINI_THINKING_LEVEL", "high");
-        let config = load_config(None).unwrap();
+        let config = load_config(Some(&missing_config_path("gemini-thinking"))).unwrap();
         assert_eq!(
             config.whisper.gemini_thinking_level,
             Some(GeminiThinkingLevel::High)
         );
         std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+    }
+
+    #[test]
+    fn test_load_config_remote_retry_count_env_var() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
+        std::env::set_var("VOXTYPE_REMOTE_RETRY_COUNT", "4");
+        let config = load_config(Some(&missing_config_path("remote-retry"))).unwrap();
+        assert_eq!(config.whisper.remote_retry_count, Some(4));
+        std::env::remove_var("VOXTYPE_REMOTE_RETRY_COUNT");
     }
 
     #[test]
@@ -4186,7 +4248,7 @@ mod tests {
         std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
         std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
         std::env::set_var("VOXTYPE_GEMINI_THINKING_LEVEL", "off");
-        let config = load_config(None).unwrap();
+        let config = load_config(Some(&missing_config_path("invalid-gemini-thinking"))).unwrap();
         assert_eq!(config.whisper.gemini_thinking_level, None);
         std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
     }
@@ -4199,7 +4261,7 @@ mod tests {
         std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
         std::env::set_var("VOXTYPE_REMOTE_API_KEY", "remote-key-123");
         std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
-        let config = load_config(None).unwrap();
+        let config = load_config(Some(&missing_config_path("remote-api-key"))).unwrap();
         assert_eq!(
             config.whisper.remote_api_key,
             Some("remote-key-123".to_string())
@@ -4215,7 +4277,7 @@ mod tests {
         std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
         std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
         std::env::set_var("VOXTYPE_WHISPER_API_KEY", "whisper-key-456");
-        let config = load_config(None).unwrap();
+        let config = load_config(Some(&missing_config_path("whisper-api-key"))).unwrap();
         assert_eq!(
             config.whisper.remote_api_key,
             Some("whisper-key-456".to_string())
@@ -4231,7 +4293,7 @@ mod tests {
         std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
         std::env::set_var("VOXTYPE_REMOTE_API_KEY", "remote-key-123");
         std::env::set_var("VOXTYPE_WHISPER_API_KEY", "whisper-key-456");
-        let config = load_config(None).unwrap();
+        let config = load_config(Some(&missing_config_path("api-key-precedence"))).unwrap();
         assert_eq!(
             config.whisper.remote_api_key,
             Some("remote-key-123".to_string())

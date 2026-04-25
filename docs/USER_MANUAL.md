@@ -1131,6 +1131,9 @@ remote_model = "whisper-1"
 # Request timeout in seconds (increase for large files or slow networks)
 remote_timeout_secs = 30
 
+# Retry transient network/server failures with exponential backoff
+remote_retry_count = 3
+
 # Optional: API key (not needed for whisper.cpp, required for OpenAI)
 # remote_api_key = "your-api-key"
 ```
@@ -1146,6 +1149,7 @@ language = "en"
 remote_endpoint = "https://api.openai.com"
 remote_model = "whisper-1"
 remote_timeout_secs = 30
+remote_retry_count = 3
 ```
 
 Set your API key via environment variable (more secure than config file):
@@ -1188,6 +1192,7 @@ remote_provider = "gemini"
 remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
 remote_model = "gemini-3-flash-preview"
 remote_timeout_secs = 60
+remote_retry_count = 3
 
 # Optional: set Gemini thinking level instead of using the API default
 # Valid values: "minimal", "low", "medium", "high"
@@ -1218,6 +1223,9 @@ Install `ffmpeg` or `lame` to let Voxtype compress Gemini uploads as MP3. Withou
 **Model availability:**
 Model names change as Google releases new versions. The example above uses `gemini-3-flash-preview`. Check the [Gemini API documentation](https://ai.google.dev/gemini-api/docs/models) for the latest model names and replace `remote_model` accordingly.
 
+**Transient failures and retries:**
+Cloud providers can return temporary 429 or 503 errors during rate limits or high demand. Voxtype retries these failures with exponential backoff by default. Increase `remote_retry_count` if your provider is often overloaded, or set it to `0` if you want failures returned immediately.
+
 ### Security Recommendations
 
 1. **Use HTTPS for non-local servers**: Voxtype warns if you configure an HTTP endpoint for non-localhost addresses, as audio would be transmitted unencrypted.
@@ -1237,6 +1245,11 @@ Model names change as Google releases new versions. The example above uses `gemi
 - Increase `remote_timeout_secs` in your config
 - Check network latency between client and server
 - For large audio files, the server may need more time to process
+
+**Temporary server errors or rate limits**:
+- Voxtype retries 408, 429, 500, 502, 503, and 504 responses by default
+- Increase `remote_retry_count` if the provider is temporarily overloaded
+- Set `remote_retry_count = 0` to disable retries while debugging
 
 **Authentication errors**:
 - Verify your API key is correct
