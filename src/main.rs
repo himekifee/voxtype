@@ -135,9 +135,11 @@ async fn main() -> anyhow::Result<()> {
             "paraformer" => config.engine = config::TranscriptionEngine::Paraformer,
             "dolphin" => config.engine = config::TranscriptionEngine::Dolphin,
             "omnilingual" => config.engine = config::TranscriptionEngine::Omnilingual,
+            "qwen3asr" => config.engine = config::TranscriptionEngine::Qwen3Asr,
+            "cohere" => config.engine = config::TranscriptionEngine::Cohere,
             _ => {
                 eprintln!(
-                    "Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual",
+                    "Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual, qwen3asr, cohere",
                     engine
                 );
                 std::process::exit(1);
@@ -223,8 +225,30 @@ async fn main() -> anyhow::Result<()> {
     if let Some(model) = cli.remote_model {
         config.whisper.remote_model = Some(model);
     }
+    if let Some(ref level) = cli.gemini_thinking_level {
+        match level.parse::<config::GeminiThinkingLevel>() {
+            Ok(level) => config.whisper.gemini_thinking_level = Some(level),
+            Err(err) => {
+                eprintln!("Error: {}", err);
+                std::process::exit(1);
+            }
+        }
+    }
     if let Some(key) = cli.remote_api_key {
         config.whisper.remote_api_key = Some(key);
+    }
+    if let Some(ref provider) = cli.remote_provider {
+        match provider.to_lowercase().as_str() {
+            "openai" => config.whisper.remote_provider = Some(config::RemoteProvider::OpenAi),
+            "gemini" => config.whisper.remote_provider = Some(config::RemoteProvider::Gemini),
+            _ => {
+                eprintln!(
+                    "Error: Invalid remote provider '{}'. Valid options: openai, gemini",
+                    provider
+                );
+                std::process::exit(1);
+            }
+        }
     }
 
     // Audio overrides
@@ -339,9 +363,10 @@ async fn main() -> anyhow::Result<()> {
             "auto" => config::VadBackend::Auto,
             "energy" => config::VadBackend::Energy,
             "whisper" => config::VadBackend::Whisper,
+            "onnx" => config::VadBackend::Onnx,
             _ => {
                 eprintln!(
-                    "Unknown VAD backend '{}'. Valid options: auto, energy, whisper",
+                    "Unknown VAD backend '{}'. Valid options: auto, energy, whisper, onnx",
                     backend
                 );
                 std::process::exit(1);
@@ -369,8 +394,10 @@ async fn main() -> anyhow::Result<()> {
                     "paraformer" => config.engine = config::TranscriptionEngine::Paraformer,
                     "dolphin" => config.engine = config::TranscriptionEngine::Dolphin,
                     "omnilingual" => config.engine = config::TranscriptionEngine::Omnilingual,
+                    "qwen3asr" => config.engine = config::TranscriptionEngine::Qwen3Asr,
+                    "cohere" => config.engine = config::TranscriptionEngine::Cohere,
                     _ => {
-                        eprintln!("Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual", engine_name);
+                        eprintln!("Error: Invalid engine '{}'. Valid options: whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual, qwen3asr, cohere", engine_name);
                         std::process::exit(1);
                     }
                 }

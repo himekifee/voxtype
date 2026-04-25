@@ -54,6 +54,9 @@ ureq = { version = "2", features = ["json"] }
 # JSON parsing (for CLI backend)
 serde_json = "1"
 
+# Base64 encoding (for Gemini remote audio payload)
+base64 = "0.22"
+
 # CLI path resolution (for CLI backend)
 which = "7"
 
@@ -70,10 +73,11 @@ whisper-rs = "0.16.0"
 parakeet-rs = { version = "0.3", optional = true }
 
 # ONNX-based ASR engines (Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual)
-ort = { version = "2.0.0-rc.11", optional = true }
+ort = { version = "2.0.0-rc.12", optional = true }
 ndarray = { version = "0.16", optional = true }
 tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
 rustfft = { version = "6", optional = true }
+half = { version = "2", optional = true }
 
 # CPU count for thread detection
 num_cpus = "1.16"
@@ -126,6 +130,17 @@ dolphin-tensorrt = ["dolphin", "ort/tensorrt"]
 omnilingual = ["onnx-common"]
 omnilingual-cuda = ["omnilingual", "ort/cuda"]
 omnilingual-tensorrt = ["omnilingual", "ort/tensorrt"]
+# Qwen3-ASR backend (ONNX-based encoder-decoder ASR with int4 decoder support)
+qwen3asr = ["onnx-common", "dep:tokenizers", "dep:half"]
+qwen3asr-cuda = ["qwen3asr", "ort/cuda"]
+qwen3asr-tensorrt = ["qwen3asr", "ort/tensorrt"]
+# Cohere Transcribe backend (ONNX-based encoder-decoder ASR with int8 weights)
+cohere = ["onnx-common"]
+cohere-cuda = ["cohere", "ort/cuda"]
+cohere-tensorrt = ["cohere", "ort/tensorrt"]
+# Whisper encoder-decoder ONNX VAD backend
+vad-onnx = ["onnx-common"]
+vad-onnx-cuda = ["vad-onnx", "ort/cuda"]
 
 [build-dependencies]
 clap = { version = "4", features = ["derive"] }

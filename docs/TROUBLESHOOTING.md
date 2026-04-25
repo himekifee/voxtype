@@ -412,6 +412,70 @@ If you experience phrase repetition (e.g., "word word word"), make sure this set
 2. Try a different model (large-v3-turbo and large-v3 are most affected)
 3. If using context optimization and experiencing issues, disable it
 
+### Gemini remote transcription errors
+
+These issues apply when using `remote_provider = "gemini"` in your config.
+
+**"Server returned 403: API key not valid"**
+
+**Cause:** The Gemini API key is missing, expired, or incorrect.
+
+**Solution:**
+1. Verify your key is set correctly:
+   ```bash
+   echo $VOXTYPE_REMOTE_API_KEY
+   ```
+   `VOXTYPE_WHISPER_API_KEY` also works as a backward-compatible alias.
+2. Check that the key is active in [Google AI Studio](https://aistudio.google.com/apikey)
+3. If the key was recently created, wait a minute for propagation
+4. Try setting it directly in config temporarily to rule out environment issues:
+   ```toml
+   [whisper]
+   remote_api_key = "your-key-here"
+   ```
+
+**"Server returned 404: models/gemini-... not found"**
+
+**Cause:** The model name in `remote_model` does not exist or is not available in your region.
+
+**Solution:**
+1. Check the [Gemini model list](https://ai.google.dev/gemini-api/docs/models) for the correct name
+2. Model names are version-sensitive. `gemini-3-flash-preview` may have been renamed or replaced
+3. Try `gemini-2.0-flash` as a fallback if newer preview models are unavailable
+4. Some models are region-restricted. Verify the model is available in your country
+
+**"Request failed: timeout" with Gemini**
+
+**Cause:** Gemini's API can be slower for longer audio clips, especially with preview models.
+
+**Solution:**
+1. Increase the timeout:
+   ```toml
+   [whisper]
+   remote_timeout_secs = 120
+   ```
+2. Keep recordings under 60 seconds when testing
+3. Use `gemini-2.0-flash` instead of preview models for faster responses
+
+**"Response missing 'text' field" with Gemini**
+
+**Cause:** Gemini returned a response in an unexpected format, possibly because the model refused the request or the audio was unreadable.
+
+**Solution:**
+1. Check verbose logs for the full response: `voxtype -vv`
+2. Ensure your audio is clear speech and not silence or loud noise
+3. Verify the model supports audio input (not all Gemini models do)
+4. Try a different Gemini model name
+
+**Rate limiting (429 errors)**
+
+**Cause:** Gemini enforces request limits on free-tier keys.
+
+**Solution:**
+1. Wait a few seconds between recordings
+2. Upgrade to a paid plan in Google AI Studio for higher limits
+3. Consider switching to a local model for high-frequency use
+
 ---
 
 ## Voice Activity Detection (VAD)

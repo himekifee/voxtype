@@ -10,6 +10,7 @@ use crate::error::VoxtypeError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 /// Default configuration file content
 pub const DEFAULT_CONFIG: &str = r#"# Voxtype Configuration
@@ -77,7 +78,7 @@ max_duration_secs = 60
 [whisper]
 # Transcription backend: "local" or "remote"
 # - local: Use whisper.cpp locally (default)
-# - remote: Send audio to a remote whisper.cpp server or OpenAI-compatible API
+# - remote: Send audio to a remote whisper.cpp server, OpenAI-compatible API, or Gemini API
 # backend = "local"
 
 # Model to use for transcription (local backend)
@@ -149,16 +150,28 @@ translate = false
 
 # --- Remote backend settings (used when backend = "remote") ---
 #
+# Remote transcription provider: "openai" or "gemini"
+# - openai: OpenAI-compatible API (default)
+# - gemini: Google Gemini API
+# remote_provider = "openai"
+#
 # Remote server endpoint URL (required for remote backend)
 # Examples:
 #   - whisper.cpp server: "http://192.168.1.100:8080"
 #   - OpenAI API: "https://api.openai.com"
+#   - Gemini API: "https://generativelanguage.googleapis.com/v1beta"
 # remote_endpoint = "http://192.168.1.100:8080"
 #
-# Model name to send to remote server (default: "whisper-1")
+# Model name to send to remote server.
+# Defaults: "gemini-3-flash-preview" for Gemini. OpenAI-compatible servers
+# may receive the local model name for older config compatibility when unset.
 # remote_model = "whisper-1"
 #
-# API key for remote server (optional, or use VOXTYPE_WHISPER_API_KEY env var)
+# Gemini thinking level (Gemini provider only). Omit to use the Gemini API default.
+# Valid values: "minimal", "low", "medium", "high"
+# gemini_thinking_level = "minimal"
+#
+# API key for remote server (optional, or use VOXTYPE_REMOTE_API_KEY / VOXTYPE_WHISPER_API_KEY env var)
 # remote_api_key = ""
 #
 # Timeout for remote requests in seconds (default: 30)
@@ -345,6 +358,14 @@ pub struct Config {
     /// Omnilingual configuration (optional, only used when engine = "omnilingual")
     #[serde(default)]
     pub omnilingual: Option<OmnilingualConfig>,
+
+    /// Qwen3-ASR configuration (optional, only used when engine = "qwen3asr")
+    #[serde(default)]
+    pub qwen3_asr: Option<Qwen3AsrConfig>,
+
+    /// Cohere Transcribe configuration (optional, only used when engine = "cohere")
+    #[serde(default)]
+    pub cohere: Option<CohereConfig>,
 
     /// Text processing configuration (replacements, spoken punctuation)
     #[serde(default)]
@@ -704,6 +725,44 @@ pub enum WhisperMode {
     Cli,
 }
 
+/// Remote transcription provider
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteProvider {
+    /// OpenAI-compatible API (default)
+    #[default]
+    OpenAi,
+    /// Google Gemini API
+    Gemini,
+}
+
+/// Gemini thinking level for remote transcription requests
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GeminiThinkingLevel {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl FromStr for GeminiThinkingLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "minimal" => Ok(GeminiThinkingLevel::Minimal),
+            "low" => Ok(GeminiThinkingLevel::Low),
+            "medium" => Ok(GeminiThinkingLevel::Medium),
+            "high" => Ok(GeminiThinkingLevel::High),
+            _ => Err(format!(
+                "Invalid Gemini thinking level '{}'. Valid options: minimal, low, medium, high",
+                s
+            )),
+        }
+    }
+}
+
 /// Language configuration supporting single language or array of allowed languages
 ///
 /// Supports three modes:
@@ -877,14 +936,22 @@ pub struct WhisperConfig {
     pub cold_model_timeout_secs: u64,
 
     // --- Remote backend settings ---
+    /// Remote transcription provider (OpenAI-compatible or Gemini)
+    #[serde(default)]
+    pub remote_provider: Option<RemoteProvider>,
+
     /// Remote server endpoint URL (e.g., "http://192.168.1.100:8080")
     /// Required when mode = "remote"
     #[serde(default)]
     pub remote_endpoint: Option<String>,
 
-    /// Model name to send to remote server (default: "whisper-1")
+    /// Model name to send to remote server
     #[serde(default)]
     pub remote_model: Option<String>,
+
+    /// Gemini thinking level. Omitted by default to preserve Gemini API defaults.
+    #[serde(default)]
+    pub gemini_thinking_level: Option<GeminiThinkingLevel>,
 
     /// API key for remote server (optional, can also use VOXTYPE_WHISPER_API_KEY env var)
     #[serde(default)]
@@ -952,8 +1019,10 @@ impl Default for WhisperConfig {
             available_models: vec![],
             max_loaded_models: default_max_loaded_models(),
             cold_model_timeout_secs: default_cold_model_timeout(),
+            remote_provider: None,
             remote_endpoint: None,
             remote_model: None,
+            gemini_thinking_level: None,
             remote_api_key: None,
             remote_timeout_secs: None,
             whisper_cli_path: None,
@@ -1156,6 +1225,101 @@ impl Default for OmnilingualConfig {
     }
 }
 
+/// Qwen3-ASR model quantization format.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Qwen3AsrQuantization {
+    /// Prefer the int4 split export (default).
+    #[default]
+    Int4,
+    /// Use the full-precision ONNX export.
+    Fp32,
+}
+
+fn default_qwen3_asr_max_tokens() -> usize {
+    256
+}
+
+/// Qwen3-ASR speech-to-text configuration (ONNX-based encoder/decoder).
+/// Requires: cargo build --features qwen3asr
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Qwen3AsrConfig {
+    /// Model name or path to ONNX model directory.
+    pub model: String,
+
+    /// Quantization format to use for decoder/encoder files.
+    #[serde(default)]
+    pub quantization: Qwen3AsrQuantization,
+
+    /// Number of CPU threads for ONNX Runtime inference.
+    #[serde(default)]
+    pub threads: Option<usize>,
+
+    /// Maximum output tokens to decode.
+    #[serde(default = "default_qwen3_asr_max_tokens")]
+    pub max_tokens: usize,
+
+    /// Load model on-demand when recording starts (true) or keep loaded (false).
+    #[serde(default = "default_on_demand_loading")]
+    pub on_demand_loading: bool,
+}
+
+impl Default for Qwen3AsrConfig {
+    fn default() -> Self {
+        Self {
+            model: "qwen3-asr-1.7b".to_string(),
+            quantization: Qwen3AsrQuantization::default(),
+            threads: None,
+            max_tokens: default_qwen3_asr_max_tokens(),
+            on_demand_loading: false,
+        }
+    }
+}
+
+fn default_cohere_language() -> String {
+    "en".to_string()
+}
+
+fn default_cohere_max_tokens() -> usize {
+    1024
+}
+
+/// Cohere Transcribe configuration (ONNX-based multilingual encoder-decoder).
+/// Requires: cargo build --features cohere
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CohereConfig {
+    /// Model name or path to ONNX model directory.
+    pub model: String,
+
+    /// Language to request from the Cohere decoder prompt.
+    #[serde(default = "default_cohere_language")]
+    pub language: String,
+
+    /// Number of CPU threads for ONNX Runtime inference.
+    #[serde(default)]
+    pub threads: Option<usize>,
+
+    /// Maximum output tokens to decode.
+    #[serde(default = "default_cohere_max_tokens")]
+    pub max_tokens: usize,
+
+    /// Load model on-demand when recording starts (true) or keep loaded (false).
+    #[serde(default = "default_on_demand_loading")]
+    pub on_demand_loading: bool,
+}
+
+impl Default for CohereConfig {
+    fn default() -> Self {
+        Self {
+            model: "cohere-transcribe-onnx-int8".to_string(),
+            language: default_cohere_language(),
+            threads: None,
+            max_tokens: default_cohere_max_tokens(),
+            on_demand_loading: false,
+        }
+    }
+}
+
 /// Transcription engine selection (which ASR technology to use)
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -1181,6 +1345,12 @@ pub enum TranscriptionEngine {
     /// Use Omnilingual (FunASR 50+ language CTC encoder via ONNX Runtime)
     /// Requires: cargo build --features omnilingual
     Omnilingual,
+    /// Use Qwen3-ASR (Qwen3 ONNX encoder-decoder ASR)
+    /// Requires: cargo build --features qwen3asr
+    Qwen3Asr,
+    /// Use Cohere Transcribe (Conformer ONNX encoder-decoder)
+    /// Requires: cargo build --features cohere
+    Cohere,
 }
 
 /// VAD backend selection
@@ -1200,6 +1370,9 @@ pub enum VadBackend {
     /// Whisper VAD using whisper-rs built-in Silero model (GGML format)
     /// More accurate but requires downloading ggml-silero-vad.bin
     Whisper,
+    /// ONNX encoder-decoder VAD model via ONNX Runtime
+    /// Requires: cargo build --features vad-onnx
+    Onnx,
 }
 
 /// Voice Activity Detection configuration
@@ -1836,8 +2009,10 @@ impl Default for Config {
                 available_models: vec![],
                 max_loaded_models: default_max_loaded_models(),
                 cold_model_timeout_secs: default_cold_model_timeout(),
+                remote_provider: None,
                 remote_endpoint: None,
                 remote_model: None,
+                gemini_thinking_level: None,
                 remote_api_key: None,
                 remote_timeout_secs: None,
                 whisper_cli_path: None,
@@ -1873,6 +2048,8 @@ impl Default for Config {
             paraformer: None,
             dolphin: None,
             omnilingual: None,
+            qwen3_asr: None,
+            cohere: None,
             text: TextConfig::default(),
             vad: VadConfig::default(),
             status: StatusConfig::default(),
@@ -1981,6 +2158,16 @@ impl Config {
                 .as_ref()
                 .map(|o| o.on_demand_loading)
                 .unwrap_or(false),
+            TranscriptionEngine::Qwen3Asr => self
+                .qwen3_asr
+                .as_ref()
+                .map(|q| q.on_demand_loading)
+                .unwrap_or(false),
+            TranscriptionEngine::Cohere => self
+                .cohere
+                .as_ref()
+                .map(|c| c.on_demand_loading)
+                .unwrap_or(false),
         }
     }
 
@@ -2018,6 +2205,16 @@ impl Config {
                 .as_ref()
                 .map(|o| o.model.as_str())
                 .unwrap_or("omnilingual (not configured)"),
+            TranscriptionEngine::Qwen3Asr => self
+                .qwen3_asr
+                .as_ref()
+                .map(|q| q.model.as_str())
+                .unwrap_or("qwen3_asr (not configured)"),
+            TranscriptionEngine::Cohere => self
+                .cohere
+                .as_ref()
+                .map(|c| c.model.as_str())
+                .unwrap_or("cohere (not configured)"),
         }
     }
 
@@ -2182,7 +2379,25 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, VoxtypeError> {
     if let Ok(endpoint) = std::env::var("VOXTYPE_REMOTE_ENDPOINT") {
         config.whisper.remote_endpoint = Some(endpoint);
     }
-    if let Ok(key) = std::env::var("VOXTYPE_WHISPER_API_KEY") {
+    if let Ok(model) = std::env::var("VOXTYPE_REMOTE_MODEL") {
+        config.whisper.remote_model = Some(model);
+    }
+    if let Ok(provider) = std::env::var("VOXTYPE_REMOTE_PROVIDER") {
+        match provider.to_lowercase().as_str() {
+            "openai" => config.whisper.remote_provider = Some(RemoteProvider::OpenAi),
+            "gemini" => config.whisper.remote_provider = Some(RemoteProvider::Gemini),
+            _ => tracing::warn!("Unknown VOXTYPE_REMOTE_PROVIDER value: {}", provider),
+        }
+    }
+    if let Ok(level) = std::env::var("VOXTYPE_GEMINI_THINKING_LEVEL") {
+        match level.parse::<GeminiThinkingLevel>() {
+            Ok(level) => config.whisper.gemini_thinking_level = Some(level),
+            Err(err) => tracing::warn!("{}", err),
+        }
+    }
+    if let Ok(key) = std::env::var("VOXTYPE_REMOTE_API_KEY") {
+        config.whisper.remote_api_key = Some(key);
+    } else if let Ok(key) = std::env::var("VOXTYPE_WHISPER_API_KEY") {
         config.whisper.remote_api_key = Some(key);
     }
     if let Ok(val) = std::env::var("VOXTYPE_RESTORE_CLIPBOARD") {
@@ -2221,6 +2436,12 @@ pub fn save_config(config: &Config, path: &Path) -> Result<(), VoxtypeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn test_default_config() {
@@ -3775,5 +3996,247 @@ mod tests {
 
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.hotkey.profile_modifiers.is_empty());
+    }
+
+    #[test]
+    fn test_remote_provider_default() {
+        assert_eq!(RemoteProvider::default(), RemoteProvider::OpenAi);
+    }
+
+    #[test]
+    fn test_gemini_thinking_level_from_str() {
+        assert_eq!(
+            "minimal".parse::<GeminiThinkingLevel>().unwrap(),
+            GeminiThinkingLevel::Minimal
+        );
+        assert_eq!(
+            "LOW".parse::<GeminiThinkingLevel>().unwrap(),
+            GeminiThinkingLevel::Low
+        );
+        assert_eq!(
+            "medium".parse::<GeminiThinkingLevel>().unwrap(),
+            GeminiThinkingLevel::Medium
+        );
+        assert_eq!(
+            "high".parse::<GeminiThinkingLevel>().unwrap(),
+            GeminiThinkingLevel::High
+        );
+        assert!("disabled".parse::<GeminiThinkingLevel>().is_err());
+    }
+
+    #[test]
+    fn test_parse_gemini_thinking_level() {
+        let toml_str = r#"
+            [hotkey]
+            key = "SCROLLLOCK"
+
+            [audio]
+            device = "default"
+            sample_rate = 16000
+            max_duration_secs = 60
+
+            [whisper]
+            model = "base.en"
+            language = "en"
+            remote_provider = "gemini"
+            remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+            gemini_thinking_level = "low"
+
+            [output]
+            mode = "type"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.whisper.gemini_thinking_level,
+            Some(GeminiThinkingLevel::Low)
+        );
+    }
+
+    #[test]
+    fn test_gemini_thinking_level_defaults_to_none() {
+        let config = Config::default();
+        assert_eq!(config.whisper.gemini_thinking_level, None);
+    }
+
+    #[test]
+    fn test_parse_remote_provider_openai() {
+        let toml_str = r#"
+            [hotkey]
+            key = "SCROLLLOCK"
+
+            [audio]
+            device = "default"
+            sample_rate = 16000
+            max_duration_secs = 60
+
+            [whisper]
+            model = "base.en"
+            language = "en"
+            remote_provider = "openai"
+            remote_endpoint = "https://api.openai.com"
+
+            [output]
+            mode = "type"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.whisper.remote_provider, Some(RemoteProvider::OpenAi));
+    }
+
+    #[test]
+    fn test_parse_remote_provider_gemini() {
+        let toml_str = r#"
+            [hotkey]
+            key = "SCROLLLOCK"
+
+            [audio]
+            device = "default"
+            sample_rate = 16000
+            max_duration_secs = 60
+
+            [whisper]
+            model = "base.en"
+            language = "en"
+            remote_provider = "gemini"
+            remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+
+            [output]
+            mode = "type"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.whisper.remote_provider, Some(RemoteProvider::Gemini));
+    }
+
+    #[test]
+    fn test_remote_provider_backward_compatible_omitted() {
+        let toml_str = r#"
+            [hotkey]
+            key = "SCROLLLOCK"
+
+            [audio]
+            device = "default"
+            sample_rate = 16000
+            max_duration_secs = 60
+
+            [whisper]
+            model = "base.en"
+            language = "en"
+            remote_endpoint = "http://localhost:8080"
+
+            [output]
+            mode = "type"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.whisper.remote_provider.is_none());
+    }
+
+    #[test]
+    fn test_load_config_remote_provider_env_var() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
+        std::env::set_var("VOXTYPE_REMOTE_PROVIDER", "gemini");
+        let config = load_config(None).unwrap();
+        assert_eq!(config.whisper.remote_provider, Some(RemoteProvider::Gemini));
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+    }
+
+    #[test]
+    fn test_load_config_remote_model_env_var() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
+        std::env::set_var("VOXTYPE_REMOTE_MODEL", "gemini-3-flash-preview");
+        let config = load_config(None).unwrap();
+        assert_eq!(
+            config.whisper.remote_model,
+            Some("gemini-3-flash-preview".to_string())
+        );
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+    }
+
+    #[test]
+    fn test_load_config_gemini_thinking_level_env_var() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
+        std::env::set_var("VOXTYPE_GEMINI_THINKING_LEVEL", "high");
+        let config = load_config(None).unwrap();
+        assert_eq!(
+            config.whisper.gemini_thinking_level,
+            Some(GeminiThinkingLevel::High)
+        );
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+    }
+
+    #[test]
+    fn test_load_config_invalid_gemini_thinking_level_env_var_warns_only() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
+        std::env::set_var("VOXTYPE_GEMINI_THINKING_LEVEL", "off");
+        let config = load_config(None).unwrap();
+        assert_eq!(config.whisper.gemini_thinking_level, None);
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+    }
+
+    #[test]
+    fn test_load_config_remote_api_key_env_var_primary() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+        std::env::set_var("VOXTYPE_REMOTE_API_KEY", "remote-key-123");
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
+        let config = load_config(None).unwrap();
+        assert_eq!(
+            config.whisper.remote_api_key,
+            Some("remote-key-123".to_string())
+        );
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+    }
+
+    #[test]
+    fn test_load_config_whisper_api_key_fallback() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+        std::env::set_var("VOXTYPE_WHISPER_API_KEY", "whisper-key-456");
+        let config = load_config(None).unwrap();
+        assert_eq!(
+            config.whisper.remote_api_key,
+            Some("whisper-key-456".to_string())
+        );
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
+    }
+
+    #[test]
+    fn test_load_config_remote_api_key_takes_precedence() {
+        let _guard = env_lock();
+        std::env::remove_var("VOXTYPE_REMOTE_PROVIDER");
+        std::env::remove_var("VOXTYPE_REMOTE_MODEL");
+        std::env::remove_var("VOXTYPE_GEMINI_THINKING_LEVEL");
+        std::env::set_var("VOXTYPE_REMOTE_API_KEY", "remote-key-123");
+        std::env::set_var("VOXTYPE_WHISPER_API_KEY", "whisper-key-456");
+        let config = load_config(None).unwrap();
+        assert_eq!(
+            config.whisper.remote_api_key,
+            Some("remote-key-123".to_string())
+        );
+        std::env::remove_var("VOXTYPE_REMOTE_API_KEY");
+        std::env::remove_var("VOXTYPE_WHISPER_API_KEY");
     }
 }

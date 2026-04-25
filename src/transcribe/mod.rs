@@ -11,6 +11,8 @@
 //! - Optionally Paraformer via ONNX Runtime (when `paraformer` feature is enabled)
 //! - Optionally Dolphin via ONNX Runtime (when `dolphin` feature is enabled)
 //! - Optionally Omnilingual via ONNX Runtime (when `omnilingual` feature is enabled)
+//! - Optionally Qwen3-ASR via ONNX Runtime (when `qwen3asr` feature is enabled)
+//! - Optionally Cohere Transcribe via ONNX Runtime (when `cohere` feature is enabled)
 
 pub mod cli;
 pub mod remote;
@@ -36,6 +38,10 @@ pub mod fbank;
 ))]
 pub mod ctc;
 
+/// Whisper-compatible log-mel extraction for ONNX models.
+#[cfg(feature = "onnx-common")]
+pub mod whisper_mel;
+
 #[cfg(feature = "parakeet")]
 pub mod parakeet;
 
@@ -53,6 +59,12 @@ pub mod dolphin;
 
 #[cfg(feature = "omnilingual")]
 pub mod omnilingual;
+
+#[cfg(feature = "qwen3asr")]
+pub mod qwen3_asr;
+
+#[cfg(feature = "cohere")]
+pub mod cohere;
 
 use crate::config::{Config, TranscriptionEngine, WhisperConfig, WhisperMode};
 use crate::error::TranscribeError;
@@ -199,6 +211,35 @@ pub fn create_transcriber(config: &Config) -> Result<Box<dyn Transcriber>, Trans
         #[cfg(not(feature = "omnilingual"))]
         TranscriptionEngine::Omnilingual => Err(TranscribeError::InitFailed(
             "Omnilingual engine requested but voxtype was not compiled with --features omnilingual"
+                .to_string(),
+        )),
+        #[cfg(feature = "qwen3asr")]
+        TranscriptionEngine::Qwen3Asr => {
+            let cfg = config.qwen3_asr.as_ref().ok_or_else(|| {
+                TranscribeError::InitFailed(
+                    "Qwen3-ASR engine selected but [qwen3_asr] config section is missing"
+                        .to_string(),
+                )
+            })?;
+            Ok(Box::new(qwen3_asr::Qwen3AsrTranscriber::new(cfg)?))
+        }
+        #[cfg(not(feature = "qwen3asr"))]
+        TranscriptionEngine::Qwen3Asr => Err(TranscribeError::InitFailed(
+            "Qwen3-ASR engine requested but voxtype was not compiled with --features qwen3asr"
+                .to_string(),
+        )),
+        #[cfg(feature = "cohere")]
+        TranscriptionEngine::Cohere => {
+            let cfg = config.cohere.as_ref().ok_or_else(|| {
+                TranscribeError::InitFailed(
+                    "Cohere engine selected but [cohere] config section is missing".to_string(),
+                )
+            })?;
+            Ok(Box::new(cohere::CohereTranscriber::new(cfg)?))
+        }
+        #[cfg(not(feature = "cohere"))]
+        TranscriptionEngine::Cohere => Err(TranscribeError::InitFailed(
+            "Cohere engine requested but voxtype was not compiled with --features cohere"
                 .to_string(),
         )),
     }

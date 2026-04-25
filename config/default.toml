@@ -75,7 +75,7 @@ max_duration_secs = 60
 [whisper]
 # Execution mode: "local" (default) or "remote"
 # - local: Use whisper.cpp locally via FFI
-# - remote: Send audio to OpenAI-compatible API endpoint
+# - remote: Send audio to OpenAI-compatible or Gemini API endpoint
 # mode = "local"
 
 # Model to use for transcription (local mode)
@@ -111,10 +111,14 @@ on_demand_loading = false
 # context_window_optimization = true
 
 # --- Remote mode settings (used when mode = "remote") ---
-# remote_endpoint = "http://192.168.1.100:8080"  # Required
-# remote_model = "whisper-1"                      # Model to request from server
-# remote_api_key = "sk-..."                       # Or use VOXTYPE_WHISPER_API_KEY env var
+# remote_endpoint = "http://192.168.1.100:8080"  # Required; Gemini uses https://generativelanguage.googleapis.com/v1beta
+# remote_provider = "openai"                      # "openai" or "gemini"
+# remote_model = "whisper-1"                      # Gemini defaults to gemini-3-flash-preview when unset
+# gemini_thinking_level = "minimal"               # Optional Gemini-only: minimal, low, medium, high
+# remote_api_key = ""                             # Prefer VOXTYPE_REMOTE_API_KEY instead of storing keys here
 # remote_timeout_secs = 30
+# When remote_provider = "gemini", voxtype sends mono 16 kHz MP3 when ffmpeg
+# or lame is installed, and falls back to WAV if no MP3 encoder is available.
 
 # --- CLI mode settings (used when mode = "cli") ---
 # Uses whisper-cli subprocess instead of whisper-rs FFI bindings.

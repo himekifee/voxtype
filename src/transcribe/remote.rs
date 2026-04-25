@@ -1,19 +1,36 @@
-//! Remote speech-to-text transcription via OpenAI-compatible API
+//! Remote speech-to-text transcription via OpenAI-compatible or Gemini API
 //!
-//! Sends audio to a remote whisper.cpp server or OpenAI-compatible endpoint
-//! for transcription, enabling use of GPU servers for faster inference.
+//! Supports:
+//! - OpenAI-compatible endpoints (whisper.cpp server, OpenAI, etc.)
+//! - Native Gemini API with inline base64 audio data
 //!
 //! Note: Remote APIs don't support language arrays. When a language array is
 //! configured, the first/primary language is used.
 
 use super::Transcriber;
-use crate::config::{LanguageConfig, WhisperConfig};
+use crate::config::{GeminiThinkingLevel, LanguageConfig, RemoteProvider, WhisperConfig};
 use crate::error::TranscribeError;
+use base64::{engine::general_purpose, Engine as _};
+use std::fs;
 use std::io::Cursor;
+use std::path::Path;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 use ureq::serde_json;
 
-/// Remote transcriber using OpenAI-compatible Whisper API
+const REMOTE_SAMPLE_RATE_HZ: u32 = 16_000;
+const GEMINI_MP3_MIME_TYPE: &str = "audio/mp3";
+const GEMINI_WAV_MIME_TYPE: &str = "audio/wav";
+const GEMINI_MP3_BITRATE_FFMPEG: &str = "32k";
+const GEMINI_MP3_BITRATE_LAME: &str = "32";
+
+struct GeminiAudioPayload {
+    data: Vec<u8>,
+    mime_type: &'static str,
+    format_name: &'static str,
+}
+
+/// Remote transcriber using OpenAI-compatible Whisper API or Gemini API
 #[derive(Debug)]
 pub struct RemoteTranscriber {
     /// Base endpoint URL (e.g., "http://192.168.1.100:8080")
@@ -28,8 +45,12 @@ pub struct RemoteTranscriber {
     api_key: Option<String>,
     /// Optional initial prompt for transcription context
     initial_prompt: Option<String>,
+    /// Optional Gemini thinking level
+    gemini_thinking_level: Option<GeminiThinkingLevel>,
     /// Request timeout
     timeout: Duration,
+    /// Remote API provider
+    provider: RemoteProvider,
 }
 
 impl RemoteTranscriber {
@@ -68,12 +89,18 @@ impl RemoteTranscriber {
         let api_key = config
             .remote_api_key
             .clone()
+            .or_else(|| std::env::var("VOXTYPE_REMOTE_API_KEY").ok())
             .or_else(|| std::env::var("VOXTYPE_WHISPER_API_KEY").ok());
+
+        let provider = config.remote_provider.unwrap_or_default();
 
         let model = config
             .remote_model
             .clone()
-            .unwrap_or_else(|| "whisper-1".to_string());
+            .unwrap_or_else(|| match provider {
+                RemoteProvider::Gemini => "gemini-3-flash-preview".to_string(),
+                RemoteProvider::OpenAi => "whisper-1".to_string(),
+            });
 
         let timeout = Duration::from_secs(config.remote_timeout_secs.unwrap_or(30));
 
@@ -87,9 +114,10 @@ impl RemoteTranscriber {
         }
 
         tracing::info!(
-            "Configured remote transcriber: endpoint={}, model={}, timeout={}s",
+            "Configured remote transcriber: endpoint={}, model={}, provider={:?}, timeout={}s",
             endpoint,
             model,
+            provider,
             timeout.as_secs()
         );
 
@@ -106,7 +134,9 @@ impl RemoteTranscriber {
             translate: config.translate,
             api_key,
             initial_prompt,
+            gemini_thinking_level: config.gemini_thinking_level,
             timeout,
+            provider,
         })
     }
 
@@ -114,7 +144,7 @@ impl RemoteTranscriber {
     fn encode_wav(&self, samples: &[f32]) -> Result<Vec<u8>, TranscribeError> {
         let spec = hound::WavSpec {
             channels: 1,
-            sample_rate: 16000,
+            sample_rate: REMOTE_SAMPLE_RATE_HZ,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
@@ -138,6 +168,163 @@ impl RemoteTranscriber {
             .map_err(|e| TranscribeError::AudioFormat(format!("Failed to finalize WAV: {}", e)))?;
 
         Ok(buffer.into_inner())
+    }
+
+    /// Encode WAV bytes to mono 16 kHz MP3 using an optional external encoder.
+    fn encode_mp3_with_external_encoder(wav_data: &[u8]) -> Result<Vec<u8>, String> {
+        Self::encode_mp3_with_external_encoder_paths(wav_data, "ffmpeg", "lame")
+    }
+
+    fn encode_mp3_with_external_encoder_paths(
+        wav_data: &[u8],
+        ffmpeg_path: &str,
+        lame_path: &str,
+    ) -> Result<Vec<u8>, String> {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("voxtype_gemini_mp3_")
+            .tempdir()
+            .map_err(|e| format!("failed to create temp directory: {}", e))?;
+
+        let wav_path = temp_dir.path().join("audio.wav");
+        let mp3_path = temp_dir.path().join("audio.mp3");
+        fs::write(&wav_path, wav_data).map_err(|e| format!("failed to write temp WAV: {}", e))?;
+
+        let mut failures = Vec::new();
+
+        let _ = fs::remove_file(&mp3_path);
+        match Self::run_ffmpeg_mp3_encoder(ffmpeg_path, &wav_path, &mp3_path) {
+            Ok(()) => return Self::read_mp3_output(&mp3_path),
+            Err(err) => failures.push(format!("ffmpeg: {}", err)),
+        }
+
+        let _ = fs::remove_file(&mp3_path);
+        match Self::run_lame_mp3_encoder(lame_path, &wav_path, &mp3_path) {
+            Ok(()) => Self::read_mp3_output(&mp3_path),
+            Err(err) => {
+                failures.push(format!("lame: {}", err));
+                Err(failures.join("; "))
+            }
+        }
+    }
+
+    fn run_ffmpeg_mp3_encoder(
+        encoder_path: &str,
+        input_path: &Path,
+        output_path: &Path,
+    ) -> Result<(), String> {
+        let output = Command::new(encoder_path)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(input_path)
+            .args([
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-codec:a",
+                "libmp3lame",
+                "-b:a",
+                GEMINI_MP3_BITRATE_FFMPEG,
+                "-f",
+                "mp3",
+            ])
+            .arg(output_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| e.to_string())?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(Self::format_encoder_failure(
+                output.status.code(),
+                &output.stderr,
+            ))
+        }
+    }
+
+    fn run_lame_mp3_encoder(
+        encoder_path: &str,
+        input_path: &Path,
+        output_path: &Path,
+    ) -> Result<(), String> {
+        let output = Command::new(encoder_path)
+            .args([
+                "--quiet",
+                "-m",
+                "m",
+                "--resample",
+                "16",
+                "-b",
+                GEMINI_MP3_BITRATE_LAME,
+            ])
+            .arg(input_path)
+            .arg(output_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| e.to_string())?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(Self::format_encoder_failure(
+                output.status.code(),
+                &output.stderr,
+            ))
+        }
+    }
+
+    fn read_mp3_output(path: &Path) -> Result<Vec<u8>, String> {
+        let mp3_data = fs::read(path).map_err(|e| format!("failed to read MP3 output: {}", e))?;
+
+        if mp3_data.is_empty() {
+            Err("encoder produced an empty MP3 file".to_string())
+        } else {
+            Ok(mp3_data)
+        }
+    }
+
+    fn format_encoder_failure(code: Option<i32>, stderr: &[u8]) -> String {
+        let stderr = String::from_utf8_lossy(stderr);
+        let stderr = stderr.trim();
+
+        if stderr.is_empty() {
+            format!("exited with code {:?}", code)
+        } else {
+            format!("exited with code {:?}: {}", code, stderr)
+        }
+    }
+
+    /// Build Gemini audio bytes, preferring MP3 to reduce request size.
+    fn encode_gemini_audio(&self, samples: &[f32]) -> Result<GeminiAudioPayload, TranscribeError> {
+        let wav_data = self.encode_wav(samples)?;
+
+        match Self::encode_mp3_with_external_encoder(&wav_data) {
+            Ok(mp3_data) => {
+                tracing::debug!(
+                    wav_bytes = wav_data.len(),
+                    mp3_bytes = mp3_data.len(),
+                    "Encoded Gemini audio as MP3"
+                );
+                Ok(GeminiAudioPayload {
+                    data: mp3_data,
+                    mime_type: GEMINI_MP3_MIME_TYPE,
+                    format_name: "MP3",
+                })
+            }
+            Err(err) => {
+                tracing::warn!(
+                    "Could not encode Gemini audio as MP3 ({}); falling back to WAV. Install ffmpeg or lame to reduce Gemini request bandwidth.",
+                    err
+                );
+                Ok(GeminiAudioPayload {
+                    data: wav_data,
+                    mime_type: GEMINI_WAV_MIME_TYPE,
+                    format_name: "WAV",
+                })
+            }
+        }
     }
 
     /// Build the multipart form body for the API request
@@ -194,10 +381,84 @@ impl RemoteTranscriber {
 
         (boundary, body)
     }
-}
 
-impl Transcriber for RemoteTranscriber {
-    fn transcribe(&self, samples: &[f32]) -> Result<String, TranscribeError> {
+    /// Build the Gemini JSON request body
+    fn build_gemini_request(&self, base64_audio: &str, mime_type: &str) -> serde_json::Value {
+        let instruction = if self.translate {
+            "Translate the audio into English.".to_string()
+        } else {
+            let mut text = "Transcribe the audio into text.".to_string();
+            if !self.language.is_auto() {
+                text.push_str(&format!(
+                    " The spoken language is {}.",
+                    self.language.primary()
+                ));
+            }
+            text
+        };
+
+        let mut body = serde_json::json!({
+            "contents": [{
+                "parts": [
+                    { "text": instruction },
+                    {
+                        "inlineData": {
+                            "mimeType": mime_type,
+                            "data": base64_audio
+                        }
+                    }
+                ]
+            }]
+        });
+
+        if let Some(ref prompt) = self.initial_prompt {
+            if let serde_json::Value::Object(ref mut map) = body {
+                map.insert(
+                    "systemInstruction".to_string(),
+                    serde_json::json!({
+                        "parts": [{ "text": prompt }]
+                    }),
+                );
+            }
+        }
+
+        if let Some(level) = self.gemini_thinking_level {
+            if let serde_json::Value::Object(ref mut map) = body {
+                map.insert(
+                    "generationConfig".to_string(),
+                    serde_json::json!({
+                        "thinkingConfig": {
+                            "thinkingLevel": level
+                        }
+                    }),
+                );
+            }
+        }
+
+        body
+    }
+
+    /// Parse the Gemini JSON response and extract transcript text
+    fn parse_gemini_response(&self, json: &serde_json::Value) -> Result<String, TranscribeError> {
+        json.get("candidates")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("content"))
+            .and_then(|c| c.get("parts"))
+            .and_then(|p| p.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|p| p.get("text"))
+            .and_then(|t| t.as_str())
+            .map(|s| s.trim().to_string())
+            .ok_or_else(|| {
+                TranscribeError::RemoteError(format!(
+                    "Gemini response missing expected fields: {}",
+                    json
+                ))
+            })
+    }
+
+    fn transcribe_openai(&self, samples: &[f32]) -> Result<String, TranscribeError> {
         if samples.is_empty() {
             return Err(TranscribeError::AudioFormat("Empty audio buffer".into()));
         }
@@ -276,6 +537,90 @@ impl Transcriber for RemoteTranscriber {
 
         Ok(text)
     }
+
+    fn transcribe_gemini(&self, samples: &[f32]) -> Result<String, TranscribeError> {
+        if samples.is_empty() {
+            return Err(TranscribeError::AudioFormat("Empty audio buffer".into()));
+        }
+
+        let duration_secs = samples.len() as f32 / 16000.0;
+        tracing::debug!(
+            "Sending {:.2}s of audio to Gemini ({} samples)",
+            duration_secs,
+            samples.len()
+        );
+
+        let start = std::time::Instant::now();
+
+        let audio = self.encode_gemini_audio(samples)?;
+        tracing::debug!(
+            "Encoded Gemini audio as {}: {} bytes ({})",
+            audio.format_name,
+            audio.data.len(),
+            audio.mime_type
+        );
+
+        let api_key = self.api_key.as_ref().ok_or_else(|| {
+            TranscribeError::ConfigError("API key is required for Gemini remote provider".into())
+        })?;
+
+        let base64_audio = general_purpose::STANDARD.encode(&audio.data);
+
+        let url = format!(
+            "{}/models/{}:generateContent?key={}",
+            self.endpoint.trim_end_matches('/'),
+            self.model,
+            api_key
+        );
+
+        let body = self.build_gemini_request(&base64_audio, audio.mime_type);
+
+        let request = ureq::post(&url)
+            .timeout(self.timeout)
+            .set("Content-Type", "application/json");
+
+        let response = request
+            .send_string(&body.to_string())
+            .map_err(|e| match e {
+                ureq::Error::Status(code, resp) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    TranscribeError::RemoteError(format!(
+                        "Gemini server returned {}: {}",
+                        code, body
+                    ))
+                }
+                ureq::Error::Transport(t) => {
+                    TranscribeError::NetworkError(format!("Gemini request failed: {}", t))
+                }
+            })?;
+
+        let json: serde_json::Value = response.into_json().map_err(|e| {
+            TranscribeError::RemoteError(format!("Failed to parse Gemini response: {}", e))
+        })?;
+
+        let text = self.parse_gemini_response(&json)?;
+
+        tracing::info!(
+            "Gemini transcription completed in {:.2}s: {:?}",
+            start.elapsed().as_secs_f32(),
+            if text.chars().count() > 50 {
+                format!("{}...", text.chars().take(50).collect::<String>())
+            } else {
+                text.clone()
+            }
+        );
+
+        Ok(text)
+    }
+}
+
+impl Transcriber for RemoteTranscriber {
+    fn transcribe(&self, samples: &[f32]) -> Result<String, TranscribeError> {
+        match self.provider {
+            RemoteProvider::Gemini => self.transcribe_gemini(samples),
+            RemoteProvider::OpenAi => self.transcribe_openai(samples),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -311,7 +656,7 @@ mod tests {
     fn test_config_validation_missing_endpoint() {
         let config = WhisperConfig {
             mode: Some(crate::config::WhisperMode::Remote),
-            remote_endpoint: None, // Missing!
+            remote_endpoint: None,
             ..Default::default()
         };
 
@@ -343,7 +688,7 @@ mod tests {
         };
 
         let transcriber = RemoteTranscriber::new(&config).unwrap();
-        let wav_data = vec![0u8; 100]; // Dummy data
+        let wav_data = vec![0u8; 100];
 
         let (boundary, body) = transcriber.build_multipart_body(&wav_data);
 
@@ -355,6 +700,7 @@ mod tests {
         // Verify required fields
         assert!(body_str.contains("name=\"file\""));
         assert!(body_str.contains("filename=\"audio.wav\""));
+        assert!(body_str.contains("Content-Type: audio/wav"));
         assert!(body_str.contains("name=\"model\""));
         assert!(body_str.contains("large-v3"));
         assert!(body_str.contains("name=\"language\""));
@@ -428,10 +774,7 @@ mod tests {
 
         let transcriber = RemoteTranscriber::new(&config).unwrap();
 
-        // Verify translate flag is stored correctly
         assert!(!transcriber.translate);
-
-        // The endpoint path logic: if !translate, use /v1/audio/transcriptions
         let path = if transcriber.translate {
             "/v1/audio/translations"
         } else {
@@ -451,10 +794,7 @@ mod tests {
 
         let transcriber = RemoteTranscriber::new(&config).unwrap();
 
-        // Verify translate flag is stored correctly
         assert!(transcriber.translate);
-
-        // The endpoint path logic: if translate, use /v1/audio/translations
         let path = if transcriber.translate {
             "/v1/audio/translations"
         } else {
@@ -499,5 +839,251 @@ mod tests {
 
         let transcriber = RemoteTranscriber::new(&config).unwrap();
         assert_eq!(transcriber.timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_gemini_default_model() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        assert_eq!(transcriber.model, "gemini-3-flash-preview");
+        assert!(matches!(transcriber.provider, RemoteProvider::Gemini));
+    }
+
+    #[test]
+    fn test_openai_default_model() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("http://localhost:8080".to_string()),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        assert_eq!(transcriber.model, "whisper-1");
+        assert!(matches!(transcriber.provider, RemoteProvider::OpenAi));
+    }
+
+    #[test]
+    fn test_encode_mp3_with_external_encoder() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let config = WhisperConfig {
+                mode: Some(crate::config::WhisperMode::Remote),
+                remote_endpoint: Some(
+                    "https://generativelanguage.googleapis.com/v1beta".to_string(),
+                ),
+                remote_provider: Some(RemoteProvider::Gemini),
+                ..Default::default()
+            };
+
+            let transcriber = RemoteTranscriber::new(&config).unwrap();
+            let samples: Vec<f32> = (0..REMOTE_SAMPLE_RATE_HZ)
+                .map(|i| {
+                    (i as f32 * 440.0 * 2.0 * std::f32::consts::PI / REMOTE_SAMPLE_RATE_HZ as f32)
+                        .sin()
+                        * 0.5
+                })
+                .collect();
+
+            let wav = transcriber.encode_wav(&samples).unwrap();
+            let temp_dir = tempfile::tempdir().unwrap();
+            let fake_ffmpeg = temp_dir.path().join("fake-ffmpeg");
+            let missing_lame = temp_dir.path().join("missing-lame");
+            fs::write(
+                &fake_ffmpeg,
+                "#!/bin/sh\nfor out do :; done\nprintf 'ID3fake-mp3' > \"$out\"\n",
+            )
+            .unwrap();
+            let mut permissions = fs::metadata(&fake_ffmpeg).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&fake_ffmpeg, permissions).unwrap();
+
+            let mp3 = RemoteTranscriber::encode_mp3_with_external_encoder_paths(
+                &wav,
+                fake_ffmpeg.to_str().unwrap(),
+                missing_lame.to_str().unwrap(),
+            )
+            .unwrap();
+
+            assert_eq!(mp3, b"ID3fake-mp3");
+        }
+    }
+
+    #[test]
+    fn test_gemini_request_structure() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            language: LanguageConfig::Single("de".to_string()),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let request = transcriber.build_gemini_request("dummyaudio", GEMINI_MP3_MIME_TYPE);
+
+        let contents = request.get("contents").unwrap().as_array().unwrap();
+        assert_eq!(contents.len(), 1);
+
+        let parts = contents[0].get("parts").unwrap().as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+
+        let text_part = &parts[0];
+        assert_eq!(
+            text_part.get("text").unwrap().as_str().unwrap(),
+            "Transcribe the audio into text. The spoken language is de."
+        );
+
+        let audio_part = &parts[1];
+        let inline_data = audio_part.get("inlineData").unwrap();
+        assert_eq!(
+            inline_data.get("mimeType").unwrap().as_str().unwrap(),
+            "audio/mp3"
+        );
+        assert_eq!(
+            inline_data.get("data").unwrap().as_str().unwrap(),
+            "dummyaudio"
+        );
+
+        assert!(request.get("systemInstruction").is_none());
+        assert!(request.get("generationConfig").is_none());
+    }
+
+    #[test]
+    fn test_gemini_request_with_thinking_level() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            gemini_thinking_level: Some(GeminiThinkingLevel::Medium),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let request = transcriber.build_gemini_request("dummyaudio", GEMINI_MP3_MIME_TYPE);
+
+        assert_eq!(
+            request
+                .get("generationConfig")
+                .and_then(|v| v.get("thinkingConfig"))
+                .and_then(|v| v.get("thinkingLevel"))
+                .and_then(|v| v.as_str()),
+            Some("medium")
+        );
+    }
+
+    #[test]
+    fn test_gemini_request_with_translate() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            translate: true,
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let request = transcriber.build_gemini_request("dummyaudio", GEMINI_MP3_MIME_TYPE);
+
+        let parts = request.get("contents").unwrap().as_array().unwrap()[0]
+            .get("parts")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            parts[0].get("text").unwrap().as_str().unwrap(),
+            "Translate the audio into English."
+        );
+    }
+
+    #[test]
+    fn test_gemini_request_with_initial_prompt() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            initial_prompt: Some("Medical terminology.".to_string()),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let request = transcriber.build_gemini_request("dummyaudio", GEMINI_MP3_MIME_TYPE);
+
+        let system = request.get("systemInstruction").unwrap();
+        let system_parts = system.get("parts").unwrap().as_array().unwrap();
+        assert_eq!(
+            system_parts[0].get("text").unwrap().as_str().unwrap(),
+            "Medical terminology."
+        );
+    }
+
+    #[test]
+    fn test_gemini_request_with_auto_language() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            language: LanguageConfig::Single("auto".to_string()),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+        let request = transcriber.build_gemini_request("dummyaudio", GEMINI_MP3_MIME_TYPE);
+
+        let parts = request.get("contents").unwrap().as_array().unwrap()[0]
+            .get("parts")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            parts[0].get("text").unwrap().as_str().unwrap(),
+            "Transcribe the audio into text."
+        );
+    }
+
+    #[test]
+    fn test_gemini_response_parsing() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+
+        let response = serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{ "text": "  Hello world  " }],
+                    "role": "model"
+                }
+            }]
+        });
+
+        let text = transcriber.parse_gemini_response(&response).unwrap();
+        assert_eq!(text, "Hello world");
+    }
+
+    #[test]
+    fn test_gemini_response_missing_fields_returns_error() {
+        let config = WhisperConfig {
+            mode: Some(crate::config::WhisperMode::Remote),
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            remote_provider: Some(RemoteProvider::Gemini),
+            ..Default::default()
+        };
+
+        let transcriber = RemoteTranscriber::new(&config).unwrap();
+
+        let response = serde_json::json!({ "error": { "message": "bad request" } });
+        assert!(transcriber.parse_gemini_response(&response).is_err());
     }
 }

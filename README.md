@@ -1,5 +1,7 @@
 # Voxtype
 
+> **Fork note:** This is an AI-generated slope for my own use. It works, and I have personally started using the Gemini provider and it is amazing. Have fun :)
+
 [![Voxtype - Voice to Text for Linux](website/images/og-preview.png)](https://voxtype.io)
 
 **[voxtype.io](https://voxtype.io)**
@@ -12,7 +14,7 @@ Hold a hotkey (default: ScrollLock) while speaking, release to transcribe and ou
 
 - **Works on any Linux desktop** - Uses compositor keybindings (Hyprland, Sway, River) with evdev fallback for X11 and other environments
 - **Fully offline by default** - Uses whisper.cpp for local transcription, with optional remote server support
-- **7 transcription engines** - Whisper, Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, and Omnilingual (see [Supported Engines](#supported-engines) below)
+- **9 transcription engines** - Whisper, Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual, Qwen3-ASR, and Cohere Transcribe (see [Supported Engines](#supported-engines) below)
 - **Chinese, Japanese, Korean, and 1600+ languages** - SenseVoice, Dolphin, and Omnilingual add native support for CJK and other non-Latin scripts
 - **Meeting mode** - Continuous meeting transcription with chunked processing, speaker attribution, and export to Markdown, JSON, SRT, or VTT
 - **Fallback chain** - Types via wtype (best CJK support), falls back to dotool (keyboard layout support), ydotool, then clipboard
@@ -259,6 +261,7 @@ Setup subcommands:
   voxtype setup model        Interactive model selection and download
   voxtype setup gpu          Manage GPU acceleration (switch CPU/Vulkan)
   voxtype setup onnx         Switch between Whisper and ONNX engines
+  voxtype setup vad --onnx   Download the ONNX VAD model
 
 Status options:
   voxtype status --format json       Output as JSON (for Waybar)
@@ -279,7 +282,7 @@ Options:
   --clipboard            Force clipboard mode
   --paste                Force paste mode (clipboard + Ctrl+V)
   --model <MODEL>        Override transcription model
-  --engine <ENGINE>      Override transcription engine (whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual)
+  --engine <ENGINE>      Override transcription engine (whisper, parakeet, moonshine, sensevoice, paraformer, dolphin, omnilingual, qwen3asr, cohere)
   --hotkey <KEY>         Override hotkey
   --toggle               Use toggle mode (press to start/stop)
   -h, --help             Print help
@@ -342,11 +345,13 @@ Voxtype ships separate binaries for Whisper and ONNX engines. Use `voxtype setup
 | **Paraformer** | zh+en, zh+yue+en | Non-autoregressive (ONNX) | Chinese-English bilingual |
 | **Dolphin** | 40 languages + 22 Chinese dialects | CTC E-Branchformer (ONNX) | Eastern languages (no English) |
 | **Omnilingual** | 1600+ languages | wav2vec2 CTC (ONNX) | Low-resource and rare languages |
+| **Qwen3-ASR** | Multilingual | Qwen3 encoder-decoder (ONNX) | 1.7B int4 multilingual ASR |
+| **Cohere Transcribe** | 14 languages | Conformer encoder-decoder (ONNX) | 2B int8 multilingual ASR |
 
 To set the engine in your config:
 
 ```toml
-engine = "sensevoice"  # or: whisper, parakeet, moonshine, paraformer, dolphin, omnilingual
+engine = "sensevoice"  # or: whisper, parakeet, moonshine, paraformer, dolphin, omnilingual, qwen3asr, cohere
 ```
 
 Or override on the command line:
@@ -465,8 +470,8 @@ sudo apt install libasound2-dev
 # Build (Whisper engine only)
 cargo build --release
 
-# Build with ONNX engines (Parakeet, Moonshine, SenseVoice, etc.)
-cargo build --release --features parakeet,moonshine,sensevoice,paraformer,dolphin
+# Build with ONNX engines (Parakeet, Moonshine, SenseVoice, Qwen3-ASR, Cohere, etc.)
+cargo build --release --features parakeet,moonshine,sensevoice,paraformer,dolphin,omnilingual,qwen3asr,cohere,vad-onnx
 
 # Or just the engine you need
 cargo build --release --features parakeet
@@ -637,9 +642,9 @@ flowchart LR
     end
 ```
 
-**Multiple transcription engines.** Voxtype supports 7 transcription engines across two runtime backends:
+**Multiple transcription engines.** Voxtype supports 9 transcription engines across two runtime backends:
 - **Whisper** (default): OpenAI's Whisper model via whisper.cpp. Supports local in-process, CLI subprocess, and remote HTTP backends. 99 languages.
-- **ONNX engines** (via ONNX Runtime): Parakeet (English), Moonshine (English), SenseVoice (zh/en/ja/ko/yue), Paraformer (zh+en bilingual), Dolphin (40 languages + Chinese dialects, no English), Omnilingual (1600+ languages). Switch engines with `voxtype setup onnx`.
+- **ONNX engines** (via ONNX Runtime): Parakeet (English), Moonshine (English), SenseVoice (zh/en/ja/ko/yue), Paraformer (zh+en bilingual), Dolphin (40 languages + Chinese dialects, no English), Omnilingual (1600+ languages), Qwen3-ASR (multilingual 1.7B), Cohere Transcribe (14 languages). Switch engines with `voxtype setup onnx`.
 
 **Why compositor keybindings?** Wayland compositors like Hyprland, Sway, and River support key-release events, enabling push-to-talk without special permissions. Voxtype's `record start/stop` commands integrate directly with your compositor's keybinding system.
 

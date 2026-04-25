@@ -564,7 +564,7 @@ voxtype setup model small.en
 ```bash
 # 1. Configure remote backend in config.toml:
 #    [whisper]
-#    backend = "remote"
+#    mode = "remote"
 #    remote_endpoint = "http://your-server:8080"
 
 # 2. Restart and test
@@ -573,6 +573,28 @@ voxtype record start && sleep 3 && voxtype record stop
 
 # 3. Check logs for remote transcription:
 journalctl --user -u voxtype --since "1 minute ago" | grep -i remote
+```
+
+### Gemini Remote Provider
+
+```bash
+# 1. Configure Gemini provider in config.toml:
+#    [whisper]
+#    mode = "remote"
+#    remote_provider = "gemini"
+#    remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+#    remote_model = "gemini-3-flash-preview"
+#    gemini_thinking_level = "minimal"  # Optional: minimal, low, medium, high
+
+# 2. Set API key via environment (or use remote_api_key in config)
+export VOXTYPE_REMOTE_API_KEY="your-gemini-api-key"
+
+# 3. Restart and test
+systemctl --user restart voxtype
+voxtype record start && sleep 3 && voxtype record stop
+
+# 4. Check logs for Gemini transcription:
+journalctl --user -u voxtype --since "1 minute ago" | grep -iE "gemini|remote"
 ```
 
 ## Output Drivers

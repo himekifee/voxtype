@@ -347,7 +347,10 @@ mod tests {
     #[tokio::test]
     async fn test_no_context_env_var_when_none() {
         // VOXTYPE_CONTEXT should not be set when context is None
-        let config = make_config("echo \"context:${VOXTYPE_CONTEXT:-unset} stdin:$(cat)\"", 5000);
+        let config = make_config(
+            "echo \"context:${VOXTYPE_CONTEXT:-unset} stdin:$(cat)\"",
+            5000,
+        );
         let processor = PostProcessor::new(&config);
         let result = processor.process_with_context("current text", None).await;
         assert_eq!(result, "context:unset stdin:current text");

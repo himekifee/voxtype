@@ -2,7 +2,7 @@
 
 This guide helps you choose the right transcription engine and model for voxtype v0.6.0. The choice depends on your language, hardware, and how you use dictation.
 
-Voxtype has seven transcription engines. Two are bundled with the standard binary (Whisper and Remote Whisper). The other five require the ONNX binary variant.
+Voxtype has nine transcription engines. Whisper is bundled with the standard binary. The ONNX engines require the ONNX binary variant.
 
 ---
 
@@ -17,6 +17,8 @@ Voxtype has seven transcription engines. Two are bundled with the standard binar
 | **Paraformer** | zh, en | Encoder-predictor-decoder | 220 - 487 MB | Fast | No | ONNX |
 | **Dolphin** | 40+ langs, 22 Chinese dialects | CTC E-Branchformer | 198 MB | Fast | No | ONNX |
 | **Omnilingual** | 1600+ | CTC wav2vec2 | 3.9 GB | Moderate | No | ONNX |
+| **Qwen3-ASR** | Multilingual | Qwen3 encoder-decoder | ~3.9 GB int4 | Moderate | Yes | ONNX |
+| **Cohere Transcribe** | 14 | Conformer encoder-decoder | 2.75 GB int8 | Moderate | Yes | ONNX |
 
 ---
 
@@ -62,7 +64,7 @@ What language(s) do you speak?
 Voxtype ships two binary variants:
 
 - **Standard binary** -- includes Whisper (whisper.cpp). This is the default.
-- **ONNX binary** -- includes Whisper plus all ONNX-based engines (Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual).
+- **ONNX binary** -- includes Whisper plus all ONNX-based engines (Parakeet, Moonshine, SenseVoice, Paraformer, Dolphin, Omnilingual, Qwen3-ASR, Cohere Transcribe).
 
 The ONNX binary is larger because it bundles ONNX Runtime. If you only use Whisper, the standard binary is all you need.
 

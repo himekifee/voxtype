@@ -6,7 +6,7 @@
 //! - Fresh subprocess per model (when gpu_isolation = true)
 //! - Remote backend model selection
 
-use crate::config::{WhisperConfig, WhisperMode};
+use crate::config::{RemoteProvider, WhisperConfig, WhisperMode};
 use crate::error::TranscribeError;
 use crate::transcribe::{self, Transcriber};
 use std::collections::HashMap;
@@ -102,16 +102,32 @@ impl ModelManager {
         self.get_or_load_cached(&model_name)
     }
 
-    /// Create a remote transcriber with model override
+    /// Create a remote transcriber with optional model override
     fn create_remote_transcriber(
         &self,
         model: &str,
     ) -> Result<Arc<dyn Transcriber>, TranscribeError> {
-        let mut config = self.config.clone();
-        // Override remote_model with requested model
-        config.remote_model = Some(model.to_string());
+        let config = self.remote_config_for_model(model);
         let transcriber = transcribe::remote::RemoteTranscriber::new(&config)?;
         Ok(Arc::new(transcriber))
+    }
+
+    fn remote_config_for_model(&self, model: &str) -> WhisperConfig {
+        let mut config = self.config.clone();
+        let provider = config.remote_provider.unwrap_or_default();
+
+        // Only override remote_model if an explicit model override was requested
+        // (model differs from config.model). For OpenAI-compatible remotes, keep
+        // the legacy fallback that sends the resolved local model when no
+        // remote_model is configured. For Gemini, leave remote_model unset so
+        // RemoteTranscriber can apply the provider-specific Gemini default.
+        if model != self.config.model
+            || (config.remote_model.is_none() && provider != RemoteProvider::Gemini)
+        {
+            config.remote_model = Some(model.to_string());
+        }
+
+        config
     }
 
     /// Create a CLI transcriber with model override
@@ -355,5 +371,63 @@ mod tests {
         assert_eq!(manager.max_loaded, 2);
         assert_eq!(manager.cold_timeout, Duration::from_secs(300));
         assert!(manager.loaded_models.is_empty());
+    }
+
+    #[test]
+    fn test_remote_model_preserved_when_no_override() {
+        let config = WhisperConfig {
+            mode: Some(WhisperMode::Remote),
+            model: "base.en".to_string(),
+            remote_model: Some("gemini-1.5-flash".to_string()),
+            remote_endpoint: Some("https://example.com".to_string()),
+            ..Default::default()
+        };
+        let manager = ModelManager::new(&config, None);
+        let cloned = manager.remote_config_for_model("base.en");
+        assert_eq!(cloned.remote_model, Some("gemini-1.5-flash".to_string()));
+    }
+
+    #[test]
+    fn test_remote_model_overridden_on_explicit_override() {
+        let config = WhisperConfig {
+            mode: Some(WhisperMode::Remote),
+            model: "base.en".to_string(),
+            remote_model: Some("gemini-1.5-flash".to_string()),
+            remote_endpoint: Some("https://example.com".to_string()),
+            ..Default::default()
+        };
+        let manager = ModelManager::new(&config, None);
+        let explicit_model = "large-v3-turbo";
+        let cloned = manager.remote_config_for_model(explicit_model);
+        assert_eq!(cloned.remote_model, Some("large-v3-turbo".to_string()));
+    }
+
+    #[test]
+    fn test_remote_model_backward_compat_when_none() {
+        let config = WhisperConfig {
+            mode: Some(WhisperMode::Remote),
+            model: "base.en".to_string(),
+            remote_model: None,
+            remote_endpoint: Some("https://example.com".to_string()),
+            ..Default::default()
+        };
+        let manager = ModelManager::new(&config, None);
+        let cloned = manager.remote_config_for_model("base.en");
+        assert_eq!(cloned.remote_model, Some("base.en".to_string()));
+    }
+
+    #[test]
+    fn test_gemini_remote_model_default_not_backfilled() {
+        let config = WhisperConfig {
+            mode: Some(WhisperMode::Remote),
+            model: "base.en".to_string(),
+            remote_provider: Some(RemoteProvider::Gemini),
+            remote_model: None,
+            remote_endpoint: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+            ..Default::default()
+        };
+        let manager = ModelManager::new(&config, None);
+        let cloned = manager.remote_config_for_model("base.en");
+        assert_eq!(cloned.remote_model, None);
     }
 }

@@ -27,6 +27,12 @@ Selects which speech-to-text engine to use for transcription.
 - `whisper` - OpenAI Whisper via whisper.cpp (default, recommended)
 - `parakeet` - NVIDIA Parakeet via ONNX Runtime (requires ONNX binary)
 - `moonshine` - Moonshine encoder-decoder transformer via ONNX Runtime (experimental, requires special binary)
+- `sensevoice` - SenseVoice CTC model via ONNX Runtime
+- `paraformer` - Paraformer CTC model via ONNX Runtime
+- `dolphin` - Dolphin CTC model via ONNX Runtime
+- `omnilingual` - Omnilingual wav2vec2 CTC model via ONNX Runtime
+- `qwen3asr` - Qwen3-ASR encoder-decoder model via ONNX Runtime
+- `cohere` - Cohere Transcribe encoder-decoder model via ONNX Runtime
 
 **Example:**
 ```toml
@@ -39,9 +45,8 @@ voxtype --engine parakeet daemon
 ```
 
 **Notes:**
-- Parakeet requires an ONNX-enabled binary (`voxtype-*-onnx-*`)
-- When using Parakeet, you must also configure the `[parakeet]` section
-- When using Moonshine, you must also configure the `[moonshine]` section
+- ONNX engines require an ONNX-enabled binary (`voxtype-*-onnx-*`)
+- Engine-specific options live in the matching config section, such as `[parakeet]`, `[moonshine]`, `[qwen3_asr]`, or `[cohere]`
 - See [PARAKEET.md](PARAKEET.md) for detailed Parakeet setup instructions
 - See [MOONSHINE.md](MOONSHINE.md) for detailed Moonshine setup instructions
 
@@ -416,6 +421,14 @@ Requires `whisper-cli` from [whisper.cpp](https://github.com/ggerganov/whisper.c
 [whisper]
 backend = "remote"
 remote_endpoint = "http://192.168.1.100:8080"
+```
+
+```toml
+[whisper]
+backend = "remote"
+remote_provider = "gemini"
+remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+remote_model = "gemini-3-flash-preview"
 ```
 
 ```toml
@@ -907,7 +920,7 @@ cold_model_timeout_secs = 60  # Evict unused models after 1 minute
 
 ## Remote Backend Settings
 
-The following options are used when `backend = "remote"`. They have no effect when using local transcription.
+The following options are used when `mode = "remote"` (or the deprecated `backend = "remote"`). They have no effect when using local transcription.
 
 > **Privacy Notice**: Remote transcription sends your audio over the network. This feature was designed for users who self-host Whisper servers on their own hardware. While it can also connect to cloud services like OpenAI, users with privacy concerns should carefully consider the implications. See [User Manual - Remote Whisper Servers](USER_MANUAL.md#remote-whisper-servers) for details.
 
@@ -915,43 +928,102 @@ The following options are used when `backend = "remote"`. They have no effect wh
 
 **Type:** String
 **Default:** None
-**Required:** Yes (when `backend = "remote"`)
+**Required:** Yes (when `mode = "remote"`)
 
 The base URL of the remote Whisper server. Must include the protocol (`http://` or `https://`).
 
 **Examples:**
 ```toml
 [whisper]
-backend = "remote"
+mode = "remote"
 
 # Self-hosted whisper.cpp server
 remote_endpoint = "http://192.168.1.100:8080"
 
 # OpenAI API
 remote_endpoint = "https://api.openai.com"
+
+# Google Gemini API
+remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
 ```
 
 **Security note:** Voxtype logs a warning if you use HTTP (unencrypted) for non-localhost endpoints, as your audio would be transmitted in the clear.
 
+### remote_provider
+
+**Type:** String
+**Default:** `"openai"`
+**Required:** No
+
+Selects which remote API protocol to use.
+
+**Values:**
+- `openai` - OpenAI-compatible Whisper API (default). Uses multipart form upload with Bearer token authentication. Compatible with whisper.cpp server, OpenAI, and other OpenAI-compatible endpoints.
+- `gemini` - Native Google Gemini API. Sends audio as inline base64 inside a JSON payload. Requires a Gemini API key. Voxtype sends MP3 (`audio/mp3`) when `ffmpeg` or `lame` is installed, and falls back to WAV (`audio/wav`) if no MP3 encoder is available.
+
+**Example:**
+```toml
+[whisper]
+mode = "remote"
+remote_provider = "gemini"
+remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+remote_model = "gemini-3-flash-preview"
+# Optional: set Gemini thinking level instead of using the API default
+# gemini_thinking_level = "minimal"
+```
+
+**Note:** When `remote_provider` is omitted, it defaults to `openai` so existing configs continue to work without changes.
+
+**Gemini bandwidth note:** Gemini supports MP3 input, so Voxtype tries to encode remote Gemini audio as mono 16 kHz MP3 before upload to reduce bandwidth. Install `ffmpeg` or `lame` to enable this optimization. If neither encoder is found, Voxtype logs a warning and sends WAV instead.
+
 ### remote_model
 
 **Type:** String
-**Default:** `"whisper-1"`
+**Default:** `"gemini-3-flash-preview"` for Gemini. For OpenAI-compatible providers, leave unset for the existing compatibility behavior or set explicitly when the provider requires a specific model.
 **Required:** No
 
 The model name to send to the remote server.
 
 - For **whisper.cpp server**: This is ignored (the server uses whatever model it was started with)
 - For **OpenAI API**: Must be `"whisper-1"`
+- For **Google Gemini API**: Use a Gemini model name such as `"gemini-3-flash-preview"`. Check the Google AI Studio documentation for available models.
 - For **other providers**: Check their documentation
 
 **Example:**
 ```toml
 [whisper]
-backend = "remote"
+mode = "remote"
 remote_endpoint = "https://api.openai.com"
 remote_model = "whisper-1"
 ```
+
+**Gemini example:**
+```toml
+[whisper]
+mode = "remote"
+remote_provider = "gemini"
+remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+remote_model = "gemini-3-flash-preview"
+```
+
+### gemini_thinking_level
+
+**Type:** String (`"minimal"`, `"low"`, `"medium"`, `"high"`)
+**Default:** None
+**Required:** No
+
+Controls Gemini thinking level for remote transcription requests. This setting only applies when `remote_provider = "gemini"`. When omitted, Voxtype leaves `thinkingConfig` out of the request so the Gemini API uses its current default behavior.
+
+**Example:**
+```toml
+[whisper]
+mode = "remote"
+remote_provider = "gemini"
+remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+gemini_thinking_level = "minimal"
+```
+
+You can also set it with `VOXTYPE_GEMINI_THINKING_LEVEL` or `--gemini-thinking-level minimal`.
 
 ### remote_api_key
 
@@ -959,19 +1031,19 @@ remote_model = "whisper-1"
 **Default:** None
 **Required:** No (depends on server)
 
-API key for authenticating with the remote server. Sent as a Bearer token in the Authorization header.
+API key for authenticating with the remote server. OpenAI-compatible providers use a Bearer token in the `Authorization` header. Gemini sends the key as a query parameter.
 
-**Recommendation:** Use the `VOXTYPE_WHISPER_API_KEY` environment variable instead of putting keys in your config file.
+**Recommendation:** Use the `VOXTYPE_REMOTE_API_KEY` environment variable instead of putting keys in your config file. `VOXTYPE_WHISPER_API_KEY` is still supported as a backward-compatible alias.
 
 **Example using environment variable:**
 ```bash
-export VOXTYPE_WHISPER_API_KEY="sk-..."
+export VOXTYPE_REMOTE_API_KEY="sk-..."
 ```
 
 **Example in config (less secure):**
 ```toml
 [whisper]
-backend = "remote"
+mode = "remote"
 remote_endpoint = "https://api.openai.com"
 remote_api_key = "sk-..."
 ```
@@ -987,7 +1059,7 @@ Maximum time in seconds to wait for the remote server to respond. Increase for s
 **Example:**
 ```toml
 [whisper]
-backend = "remote"
+mode = "remote"
 remote_endpoint = "http://192.168.1.100:8080"
 remote_timeout_secs = 60  # 60 second timeout for long recordings
 ```
@@ -1185,6 +1257,92 @@ engine = "moonshine"
 model = "base"
 quantized = true
 on_demand_loading = false  # Keep model loaded for fast response
+```
+
+---
+
+## [qwen3_asr]
+
+Configuration for the Qwen3-ASR speech-to-text engine. This section is only used when `engine = "qwen3asr"`.
+
+### model
+
+**Type:** String
+**Default:** `"qwen3-asr-1.7b"`
+**Required:** No
+
+Model name or absolute path to a Qwen3-ASR ONNX model directory. The directory should contain the encoder, decoder init, decoder step, `embed_tokens.bin`, `config.json`, and `tokenizer.json` files.
+
+### quantization
+
+**Type:** String (`int4`, `fp32`)
+**Default:** `int4`
+**Required:** No
+
+Preferred model variant. `int4` uses the `.int4.onnx` decoder files when present and falls back to FP32 model files if they are missing.
+
+### max_tokens
+
+**Type:** Integer
+**Default:** `256`
+**Required:** No
+
+Maximum number of decoder tokens to generate for one transcription.
+
+### Complete Example
+
+```toml
+engine = "qwen3asr"
+
+[qwen3_asr]
+model = "qwen3-asr-1.7b"
+quantization = "int4"
+max_tokens = 256
+# threads = 4
+# on_demand_loading = false
+```
+
+---
+
+## [cohere]
+
+Configuration for the Cohere Transcribe speech-to-text engine. This section is only used when `engine = "cohere"`.
+
+### model
+
+**Type:** String
+**Default:** `"cohere-transcribe-onnx-int8"`
+**Required:** No
+
+Model name or absolute path to a Cohere Transcribe ONNX model directory. The directory should contain `cohere-encoder.int8.onnx`, `cohere-encoder.int8.onnx.data`, `cohere-decoder.int8.onnx`, and `tokens.txt`.
+
+### language
+
+**Type:** String
+**Default:** `"en"`
+**Required:** No
+
+Language code used in the decoder prompt. Supported model-card languages include `en`, `de`, `fr`, `es`, `it`, `pt`, `nl`, `pl`, `el`, `ar`, `ja`, `zh`, `vi`, and `ko`.
+
+### max_tokens
+
+**Type:** Integer
+**Default:** `1024`
+**Required:** No
+
+Maximum number of decoder tokens to generate per 30-second audio chunk. Values above `1024` are clamped to the model's context window. CJK languages (e.g. `zh`, `ja`, `ko`) typically need the full `1024` to avoid mid-chunk truncation; space-separated languages can use smaller values to cut decode time.
+
+### Complete Example
+
+```toml
+engine = "cohere"
+
+[cohere]
+model = "cohere-transcribe-onnx-int8"
+language = "en"
+max_tokens = 1024
+# threads = 4
+# on_demand_loading = false
 ```
 
 ---
@@ -2018,7 +2176,7 @@ voxtype --vad daemon
 
 ### backend
 
-**Type:** String (`auto`, `energy`, `whisper`)
+**Type:** String (`auto`, `energy`, `whisper`, `onnx`)
 **Default:** `auto`
 **Required:** No
 
@@ -2029,6 +2187,7 @@ VAD detection algorithm to use:
   - Parakeet engine: uses Energy VAD (fast, no model needed)
 - `energy` - Simple RMS energy-based detection. Fast and works with any engine, no model download required.
 - `whisper` - Silero VAD via whisper-rs. More accurate speech detection but requires downloading the VAD model with `voxtype setup vad`.
+- `onnx` - Whisper-VAD encoder-decoder ONNX model. Requires an ONNX-enabled binary and downloading the ONNX VAD model with `voxtype setup vad --onnx`.
 
 **Example:**
 ```toml
@@ -2494,7 +2653,11 @@ Any config file setting can be overridden via environment variable. These are ap
 | `VOXTYPE_GPU_DEVICE` | integer | `whisper.gpu_device` |
 | `VOXTYPE_ON_DEMAND_LOADING` | bool | `whisper.on_demand_loading` |
 | `VOXTYPE_REMOTE_ENDPOINT` | string | `whisper.remote_endpoint` |
+| `VOXTYPE_REMOTE_MODEL` | string | `whisper.remote_model` |
+| `VOXTYPE_REMOTE_PROVIDER` | string | `whisper.remote_provider` |
+| `VOXTYPE_REMOTE_API_KEY` | string | `whisper.remote_api_key` |
 | `VOXTYPE_WHISPER_API_KEY` | string | `whisper.remote_api_key` |
+| `VOXTYPE_GEMINI_THINKING_LEVEL` | string | `whisper.gemini_thinking_level` |
 
 **Audio:**
 
@@ -2681,7 +2844,7 @@ Offload transcription to a GPU server on your local network:
 
 ```toml
 [whisper]
-backend = "remote"
+mode = "remote"
 language = "en"
 
 # Your whisper.cpp server
@@ -2700,12 +2863,12 @@ Use OpenAI's hosted Whisper API (requires API key, has privacy implications):
 
 ```toml
 [whisper]
-backend = "remote"
+mode = "remote"
 language = "en"
 remote_endpoint = "https://api.openai.com"
 remote_model = "whisper-1"
 remote_timeout_secs = 30
-# API key set via: export VOXTYPE_WHISPER_API_KEY="sk-..."
+# API key set via: export VOXTYPE_REMOTE_API_KEY="sk-..."
 ```
 
 > **Note**: Cloud-based transcription sends your audio to third-party servers. See [User Manual - Remote Whisper Servers](USER_MANUAL.md#remote-whisper-servers) for privacy considerations.

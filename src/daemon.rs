@@ -693,7 +693,9 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                     if let Some(ref t) = transcriber_preloaded {
                         Ok(t.clone())
                     } else {
@@ -1362,12 +1364,25 @@ impl Daemon {
                         } else {
                             // Profile exists but has no post_process_command, use default
                             if let Some(ref post_processor) = self.post_processor {
-                                tracing::info!("Post-processing, has_context: {}", recent_context.is_some());
-                                tracing::debug!("Post-processing input: {:?}, context: {:?}", processed_text, recent_context);
+                                tracing::info!(
+                                    "Post-processing, has_context: {}",
+                                    recent_context.is_some()
+                                );
+                                tracing::debug!(
+                                    "Post-processing input: {:?}, context: {:?}",
+                                    processed_text,
+                                    recent_context
+                                );
                                 let result = post_processor
-                                    .process_with_context(&processed_text, recent_context.as_deref())
+                                    .process_with_context(
+                                        &processed_text,
+                                        recent_context.as_deref(),
+                                    )
                                     .await;
-                                tracing::info!("Post-processed: changed: {}", result != processed_text);
+                                tracing::info!(
+                                    "Post-processed: changed: {}",
+                                    result != processed_text
+                                );
                                 tracing::debug!("Post-processed result: {:?}", result);
                                 result
                             } else {
@@ -1375,8 +1390,15 @@ impl Daemon {
                             }
                         }
                     } else if let Some(ref post_processor) = self.post_processor {
-                        tracing::info!("Post-processing, has_context: {}", recent_context.is_some());
-                        tracing::debug!("Post-processing input: {:?}, context: {:?}", processed_text, recent_context);
+                        tracing::info!(
+                            "Post-processing, has_context: {}",
+                            recent_context.is_some()
+                        );
+                        tracing::debug!(
+                            "Post-processing input: {:?}, context: {:?}",
+                            processed_text,
+                            recent_context
+                        );
                         let result = post_processor
                             .process_with_context(&processed_text, recent_context.as_deref())
                             .await;
@@ -1388,8 +1410,7 @@ impl Daemon {
                     };
 
                     // Track last dictation for context in subsequent post-processing
-                    self.last_dictation =
-                        Some((final_text.clone(), Instant::now()));
+                    self.last_dictation = Some((final_text.clone(), Instant::now()));
 
                     if smart_submit {
                         tracing::debug!(
@@ -1667,7 +1688,9 @@ impl Daemon {
                 | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                     // Parakeet/Moonshine uses its own model loading
                     transcriber_preloaded = Some(Arc::from(crate::transcribe::create_transcriber(
                         &self.config,
@@ -1770,7 +1793,9 @@ impl Daemon {
                                         | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                                             let config = self.config.clone();
                                             self.model_load_task = Some(tokio::task::spawn_blocking(move || {
                                                 crate::transcribe::create_transcriber(&config).map(Arc::from)
@@ -1793,7 +1818,9 @@ impl Daemon {
                                         | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                                             if let Some(ref t) = transcriber_preloaded {
                                                 let transcriber = t.clone();
                                                 tokio::task::spawn_blocking(move || {
@@ -1961,7 +1988,9 @@ impl Daemon {
                                         | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                                             let config = self.config.clone();
                                             self.model_load_task = Some(tokio::task::spawn_blocking(move || {
                                                 crate::transcribe::create_transcriber(&config).map(Arc::from)
@@ -1984,7 +2013,9 @@ impl Daemon {
                                         | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                                             if let Some(ref t) = transcriber_preloaded {
                                                 let transcriber = t.clone();
                                                 tokio::task::spawn_blocking(move || {
@@ -2397,7 +2428,9 @@ impl Daemon {
                                 | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                                     let config = self.config.clone();
                                     self.model_load_task = Some(tokio::task::spawn_blocking(move || {
                                         crate::transcribe::create_transcriber(&config).map(Arc::from)
@@ -2419,7 +2452,9 @@ impl Daemon {
                                 | crate::config::TranscriptionEngine::SenseVoice
                 | crate::config::TranscriptionEngine::Paraformer
                 | crate::config::TranscriptionEngine::Dolphin
-                | crate::config::TranscriptionEngine::Omnilingual => {
+                | crate::config::TranscriptionEngine::Omnilingual
+                | crate::config::TranscriptionEngine::Qwen3Asr
+                | crate::config::TranscriptionEngine::Cohere => {
                                     if let Some(ref t) = transcriber_preloaded {
                                         let transcriber = t.clone();
                                         tokio::task::spawn_blocking(move || {

@@ -71,21 +71,20 @@ impl OmnilingualTranscriber {
         tracing::debug!("Loaded {} tokens", tokens.len());
 
         // Create ONNX session
-        let session = Session::builder()
+        let builder = Session::builder()
             .map_err(|e| {
                 TranscribeError::InitFailed(format!("ONNX session builder failed: {}", e))
             })?
             .with_intra_threads(threads)
-            .map_err(|e| {
-                TranscribeError::InitFailed(format!("Failed to set threads: {}", e))
-            })?
-            .commit_from_file(&model_file)
-            .map_err(|e| {
-                TranscribeError::InitFailed(format!(
-                    "Failed to load Omnilingual model from {:?}: {}",
-                    model_file, e
-                ))
-            })?;
+            .map_err(|e| TranscribeError::InitFailed(format!("Failed to set threads: {}", e)))?;
+        let mut builder = crate::onnx_runtime::maybe_apply_cuda(builder, None, "Omnilingual")
+            .map_err(|e| TranscribeError::InitFailed(format!("Failed to configure CUDA: {}", e)))?;
+        let session = builder.commit_from_file(&model_file).map_err(|e| {
+            TranscribeError::InitFailed(format!(
+                "Failed to load Omnilingual model from {:?}: {}",
+                model_file, e
+            ))
+        })?;
 
         tracing::info!(
             "Omnilingual model loaded in {:.2}s",
@@ -124,10 +123,7 @@ impl Transcriber for OmnilingualTranscriber {
         // x: shape [1, num_samples]
         let x_tensor =
             Tensor::<f32>::from_array(([1usize, num_samples], normalized)).map_err(|e| {
-                TranscribeError::InferenceFailed(format!(
-                    "Failed to create input tensor: {}",
-                    e
-                ))
+                TranscribeError::InferenceFailed(format!("Failed to create input tensor: {}", e))
             })?;
 
         // Run inference
@@ -212,7 +208,11 @@ impl Transcriber for OmnilingualTranscriber {
 fn normalize_audio(samples: &[f32]) -> Vec<f32> {
     let n = samples.len() as f32;
     let mean: f32 = samples.iter().sum::<f32>() / n;
-    let variance: f32 = samples.iter().map(|&s| (s - mean) * (s - mean)).sum::<f32>() / n;
+    let variance: f32 = samples
+        .iter()
+        .map(|&s| (s - mean) * (s - mean))
+        .sum::<f32>()
+        / n;
     let inv_stddev = 1.0 / (variance + 1e-5_f32).sqrt();
 
     samples.iter().map(|&s| (s - mean) * inv_stddev).collect()

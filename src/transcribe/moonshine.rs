@@ -118,14 +118,23 @@ impl MoonshineTranscriber {
             .map_err(|e| TranscribeError::InitFailed(format!("Failed to load tokenizer: {}", e)))?;
 
         // Create ONNX sessions
-        let encoder = Session::builder()
+        let encoder_builder = Session::builder()
             .map_err(|e| {
                 TranscribeError::InitFailed(format!("ONNX encoder session builder failed: {}", e))
             })?
             .with_intra_threads(threads)
             .map_err(|e| {
                 TranscribeError::InitFailed(format!("Failed to set encoder threads: {}", e))
-            })?
+            })?;
+        let mut encoder_builder =
+            crate::onnx_runtime::maybe_apply_cuda(encoder_builder, None, "Moonshine encoder")
+                .map_err(|e| {
+                    TranscribeError::InitFailed(format!(
+                        "Failed to configure CUDA for Moonshine encoder: {}",
+                        e
+                    ))
+                })?;
+        let encoder = encoder_builder
             .commit_from_file(&encoder_file)
             .map_err(|e| {
                 TranscribeError::InitFailed(format!(
@@ -134,14 +143,23 @@ impl MoonshineTranscriber {
                 ))
             })?;
 
-        let decoder = Session::builder()
+        let decoder_builder = Session::builder()
             .map_err(|e| {
                 TranscribeError::InitFailed(format!("ONNX decoder session builder failed: {}", e))
             })?
             .with_intra_threads(threads)
             .map_err(|e| {
                 TranscribeError::InitFailed(format!("Failed to set decoder threads: {}", e))
-            })?
+            })?;
+        let mut decoder_builder =
+            crate::onnx_runtime::maybe_apply_cuda(decoder_builder, None, "Moonshine decoder")
+                .map_err(|e| {
+                    TranscribeError::InitFailed(format!(
+                        "Failed to configure CUDA for Moonshine decoder: {}",
+                        e
+                    ))
+                })?;
+        let decoder = decoder_builder
             .commit_from_file(&decoder_file)
             .map_err(|e| {
                 TranscribeError::InitFailed(format!(

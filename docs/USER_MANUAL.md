@@ -631,7 +631,7 @@ Any valid evdev key name works. Common choices:
 
 ## Transcription Engines
 
-Voxtype supports seven speech-to-text engines. Whisper uses whisper.cpp and works with any binary variant. The other six engines run via ONNX Runtime and require an ONNX binary variant (`voxtype-*-onnx-*`).
+Voxtype supports nine speech-to-text engines. Whisper uses whisper.cpp and works with any binary variant. The other eight engines run via ONNX Runtime and require an ONNX binary variant (`voxtype-*-onnx-*`).
 
 | Engine | Best For | GPU Required | Languages |
 |--------|----------|--------------|-----------|
@@ -642,6 +642,8 @@ Voxtype supports seven speech-to-text engines. Whisper uses whisper.cpp and work
 | **Paraformer** | Chinese + English dictation | No | Chinese (with English code-switching) |
 | **Dolphin** | Dictation-optimized, fast CTC | No | Chinese + English |
 | **Omnilingual** | Broadest language coverage in ONNX engines | No | 50+ languages |
+| **Qwen3-ASR** | Multilingual Qwen3 encoder-decoder ASR | Optional (CUDA available) | Multilingual |
+| **Cohere Transcribe** | 2B Conformer encoder-decoder ASR | Optional (CUDA available) | 14 languages |
 
 ### Selecting an Engine
 
@@ -658,6 +660,8 @@ engine = "sensevoice"
 engine = "paraformer"
 engine = "dolphin"
 engine = "omnilingual"
+engine = "qwen3asr"
+engine = "cohere"
 ```
 
 **Via CLI flag** (overrides config):
@@ -670,9 +674,11 @@ voxtype --engine sensevoice daemon
 voxtype --engine paraformer daemon
 voxtype --engine dolphin daemon
 voxtype --engine omnilingual daemon
+voxtype --engine qwen3asr daemon
+voxtype --engine cohere daemon
 ```
 
-Valid `--engine` values: `whisper`, `parakeet`, `moonshine`, `sensevoice`, `paraformer`, `dolphin`, `omnilingual`.
+Valid `--engine` values: `whisper`, `parakeet`, `moonshine`, `sensevoice`, `paraformer`, `dolphin`, `omnilingual`, `qwen3asr`, `cohere`.
 
 ### Switching to an ONNX Engine
 
@@ -841,6 +847,56 @@ model = "omnilingual-large"  # Default model
 # on_demand_loading = false
 ```
 
+### Qwen3-ASR
+
+Qwen3-ASR is a Qwen3-based encoder-decoder model running via ONNX Runtime. It offers:
+
+- Multilingual ASR with a 1.7B parameter decoder
+- int4 decoder support for lower memory use
+- CUDA acceleration in ONNX builds compiled with `qwen3asr-cuda`
+
+**Requirements:**
+- An ONNX-enabled binary (`voxtype-*-onnx-*`)
+- The Qwen3-ASR ONNX model directory downloaded to `~/.local/share/voxtype/models/`
+
+**Configuration:**
+
+```toml
+engine = "qwen3asr"
+
+[qwen3_asr]
+model = "qwen3-asr-1.7b"
+quantization = "int4"
+# max_tokens = 256
+# threads = 4
+# on_demand_loading = false
+```
+
+### Cohere Transcribe
+
+Cohere Transcribe is a 2B Conformer-based encoder-decoder model running via ONNX Runtime. It offers:
+
+- INT8 ONNX weights for local CPU inference
+- Raw 16 kHz waveform input, with feature extraction inside the encoder graph
+- 14 supported languages, selected with the `[cohere].language` prompt setting
+
+**Requirements:**
+- An ONNX-enabled binary (`voxtype-*-onnx-*`)
+- The Cohere Transcribe ONNX model directory downloaded to `~/.local/share/voxtype/models/`
+
+**Configuration:**
+
+```toml
+engine = "cohere"
+
+[cohere]
+model = "cohere-transcribe-onnx-int8"
+language = "en"
+# max_tokens = 256
+# threads = 4
+# on_demand_loading = false
+```
+
 ---
 
 ## Multi-Model Support
@@ -999,14 +1055,14 @@ model = "/path/to/my/custom-model.bin"
 
 ## Remote Whisper Servers
 
-Voxtype can offload transcription to a remote server running whisper.cpp or any OpenAI-compatible Whisper API. This feature was designed for users who self-host Whisper servers on their own hardware (e.g., a home GPU server), but it can also connect to cloud-based services.
+Voxtype can offload transcription to a remote server running whisper.cpp, any OpenAI-compatible Whisper API, or the Google Gemini API. This feature was designed for users who self-host Whisper servers on their own hardware (e.g., a home GPU server), but it can also connect to cloud-based services.
 
 > **Privacy Notice**
 >
 > When using remote transcription, your audio is transmitted over the network to the configured server. **If privacy is a concern, you should carefully consider who operates the remote server and how your data is handled.**
 >
 > - **Self-hosted servers**: You maintain full control over your data
-> - **Cloud services (OpenAI, etc.)**: Your audio is processed by third parties and may be subject to their privacy policies, data retention, and usage terms
+> - **Cloud services (OpenAI, Google Gemini, etc.)**: Your audio is processed by third parties and may be subject to their privacy policies, data retention, and usage terms
 >
 > For maximum privacy, use Voxtype's default local transcription mode, which processes all audio entirely on your machine with no network connectivity.
 
@@ -1060,8 +1116,8 @@ Edit your `~/.config/voxtype/config.toml`:
 
 ```toml
 [whisper]
-# Switch to remote backend
-backend = "remote"
+# Switch to remote mode
+mode = "remote"
 
 # Language setting still applies
 language = "en"
@@ -1085,7 +1141,7 @@ While this feature was built for self-hosted servers, it also works with OpenAI'
 
 ```toml
 [whisper]
-backend = "remote"
+mode = "remote"
 language = "en"
 remote_endpoint = "https://api.openai.com"
 remote_model = "whisper-1"
@@ -1095,7 +1151,7 @@ remote_timeout_secs = 30
 Set your API key via environment variable (more secure than config file):
 
 ```bash
-export VOXTYPE_WHISPER_API_KEY="sk-..."
+export VOXTYPE_REMOTE_API_KEY="sk-..."
 ```
 
 > **Cloud Service Considerations**
@@ -1107,11 +1163,66 @@ export VOXTYPE_WHISPER_API_KEY="sk-..."
 >
 > For most users, local transcription with GPU acceleration provides better privacy, lower latency, and no ongoing costs.
 
+### Using with Google Gemini API
+
+Voxtype also supports the Google Gemini API as a remote transcription provider. Instead of the OpenAI-compatible multipart upload, the Gemini provider sends your audio as inline base64 inside a JSON payload. Gemini supports MP3 audio, so Voxtype sends mono 16 kHz MP3 when `ffmpeg` or `lame` is installed and falls back to WAV if no MP3 encoder is available. This is useful if you already have a Gemini API key and want to experiment with Google's speech-capable models.
+
+**Why use Gemini:**
+- You already have Google AI Studio or Google Cloud credits
+- You want to try newer multimodal models that accept audio directly
+- You prefer Google's pricing or availability in your region
+
+**Getting an API key:**
+
+1. Visit [Google AI Studio](https://aistudio.google.com/apikey)
+2. Sign in with your Google account
+3. Create a new API key
+4. Copy the key for use with voxtype
+
+**Configuring voxtype for Gemini:**
+
+```toml
+[whisper]
+mode = "remote"
+remote_provider = "gemini"
+remote_endpoint = "https://generativelanguage.googleapis.com/v1beta"
+remote_model = "gemini-3-flash-preview"
+remote_timeout_secs = 60
+
+# Optional: set Gemini thinking level instead of using the API default
+# Valid values: "minimal", "low", "medium", "high"
+# gemini_thinking_level = "minimal"
+```
+
+Set your API key via environment variable:
+
+```bash
+export VOXTYPE_REMOTE_API_KEY="your-gemini-api-key"
+```
+
+**Privacy considerations with Gemini:**
+- Your audio is sent to Google's servers and processed by their infrastructure
+- Review Google's AI Studio [Terms of Service](https://ai.google.dev/gemini-api/terms) and privacy policy
+- Google may use API traffic to improve their models unless you opt out through their data usage settings
+- For sensitive or confidential dictation, local transcription is strongly recommended
+
+**Language support:**
+Gemini models auto-detect language from the audio. If you set `language = "en"` in your config, voxtype still sends the hint but Gemini may override it based on what it hears. For best results with mixed-language dictation, leave `language = "auto"`.
+
+**Thinking level:**
+Gemini supports configurable thinking levels for some models. Set `gemini_thinking_level = "minimal"`, `"low"`, `"medium"`, or `"high"` if you want to choose one explicitly. Leave it unset to preserve Gemini's default behavior.
+
+**Bandwidth optimization:**
+Install `ffmpeg` or `lame` to let Voxtype compress Gemini uploads as MP3. Without either encoder, Voxtype still works but sends larger WAV payloads.
+
+**Model availability:**
+Model names change as Google releases new versions. The example above uses `gemini-3-flash-preview`. Check the [Gemini API documentation](https://ai.google.dev/gemini-api/docs/models) for the latest model names and replace `remote_model` accordingly.
+
 ### Security Recommendations
 
 1. **Use HTTPS for non-local servers**: Voxtype warns if you configure an HTTP endpoint for non-localhost addresses, as audio would be transmitted unencrypted.
 
-2. **Prefer environment variables for API keys**: Use `VOXTYPE_WHISPER_API_KEY` instead of putting keys in config files.
+2. **Prefer environment variables for API keys**: Use `VOXTYPE_REMOTE_API_KEY` instead of putting keys in config files. `VOXTYPE_WHISPER_API_KEY` still works as a backward-compatible alias. This applies to both OpenAI and Gemini providers.
 
 3. **Firewall your self-hosted server**: If running whisper.cpp server, ensure it's only accessible from trusted networks.
 
@@ -1895,7 +2006,7 @@ voxtype --vad daemon
 | Option | Default | Description |
 |--------|---------|-------------|
 | `enabled` | `false` | Enable VAD filtering |
-| `backend` | `auto` | Detection algorithm: `auto`, `energy`, `whisper` |
+| `backend` | `auto` | Detection algorithm: `auto`, `energy`, `whisper`, `onnx` |
 | `threshold` | `0.5` | Sensitivity (0.0 = very sensitive, 1.0 = aggressive) |
 | `min_speech_duration_ms` | `100` | Minimum speech required (ms) |
 
@@ -1908,6 +2019,10 @@ voxtype --vad daemon
 - **whisper**: Silero VAD via whisper-rs. More accurate but requires downloading the model:
   ```bash
   voxtype setup vad
+  ```
+- **onnx**: Whisper-VAD encoder-decoder ONNX model. Requires an ONNX-enabled binary and model download:
+  ```bash
+  voxtype setup vad --onnx
   ```
 
 ### When to Use VAD

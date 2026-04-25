@@ -345,10 +345,7 @@ const SENSEVOICE_MODELS: &[SenseVoiceModelInfo] = &[
         size_mb: 938,
         description: "Full precision (larger, slightly better accuracy)",
         languages: "zh/en/ja/ko/yue",
-        files: &[
-            ("model.onnx", "model.onnx"),
-            ("tokens.txt", "tokens.txt"),
-        ],
+        files: &[("model.onnx", "model.onnx"), ("tokens.txt", "tokens.txt")],
         huggingface_repo: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
     },
 ];
@@ -409,20 +406,18 @@ struct DolphinModelInfo {
     huggingface_repo: &'static str,
 }
 
-const DOLPHIN_MODELS: &[DolphinModelInfo] = &[
-    DolphinModelInfo {
-        name: "base",
-        dir_name: "dolphin-base",
-        size_mb: 198,
-        description: "Dictation-optimized (recommended)",
-        languages: "en/zh",
-        files: &[
-            ("model.int8.onnx", "model.int8.onnx"),
-            ("tokens.txt", "tokens.txt"),
-        ],
-        huggingface_repo: "csukuangfj/sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02",
-    },
-];
+const DOLPHIN_MODELS: &[DolphinModelInfo] = &[DolphinModelInfo {
+    name: "base",
+    dir_name: "dolphin-base",
+    size_mb: 198,
+    description: "Dictation-optimized (recommended)",
+    languages: "en/zh",
+    files: &[
+        ("model.int8.onnx", "model.int8.onnx"),
+        ("tokens.txt", "tokens.txt"),
+    ],
+    huggingface_repo: "csukuangfj/sherpa-onnx-dolphin-base-ctc-multi-lang-int8-2025-04-02",
+}];
 
 // =============================================================================
 // Omnilingual Model Definitions
@@ -438,20 +433,82 @@ struct OmnilingualModelInfo {
     huggingface_repo: &'static str,
 }
 
-const OMNILINGUAL_MODELS: &[OmnilingualModelInfo] = &[
-    OmnilingualModelInfo {
-        name: "300m",
-        dir_name: "omnilingual-300m",
-        size_mb: 3900,
-        description: "1600+ languages, 300M params",
-        languages: "1600+ langs",
-        files: &[
-            ("model.onnx", "model.onnx"),
-            ("tokens.txt", "tokens.txt"),
-        ],
-        huggingface_repo: "csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-2025-11-12",
-    },
-];
+const OMNILINGUAL_MODELS: &[OmnilingualModelInfo] = &[OmnilingualModelInfo {
+    name: "300m",
+    dir_name: "omnilingual-300m",
+    size_mb: 3900,
+    description: "1600+ languages, 300M params",
+    languages: "1600+ langs",
+    files: &[("model.onnx", "model.onnx"), ("tokens.txt", "tokens.txt")],
+    huggingface_repo: "csukuangfj/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-2025-11-12",
+}];
+
+// =============================================================================
+// Qwen3-ASR Model Definitions
+// =============================================================================
+
+struct Qwen3AsrModelInfo {
+    name: &'static str,
+    dir_name: &'static str,
+    size_mb: u32,
+    description: &'static str,
+    languages: &'static str,
+    files: &'static [(&'static str, &'static str)],
+    huggingface_repo: &'static str,
+}
+
+const QWEN3_ASR_MODELS: &[Qwen3AsrModelInfo] = &[Qwen3AsrModelInfo {
+    name: "qwen3-asr-1.7b",
+    dir_name: "qwen3-asr-1.7b",
+    size_mb: 3940,
+    description: "1.7B decoder, int4 quantized",
+    languages: "multi",
+    files: &[
+        ("encoder.int4.onnx", "encoder.int4.onnx"),
+        ("decoder_init.int4.onnx", "decoder_init.int4.onnx"),
+        ("decoder_step.int4.onnx", "decoder_step.int4.onnx"),
+        ("decoder_weights.int4.data", "decoder_weights.int4.data"),
+        ("embed_tokens.bin", "embed_tokens.bin"),
+        ("config.json", "config.json"),
+        ("preprocessor_config.json", "preprocessor_config.json"),
+        ("tokenizer.json", "tokenizer.json"),
+        ("tokenizer_config.json", "tokenizer_config.json"),
+        ("added_tokens.json", "added_tokens.json"),
+    ],
+    huggingface_repo: "andrewleech/qwen3-asr-1.7b-onnx",
+}];
+
+// =============================================================================
+// Cohere Transcribe Model Definitions
+// =============================================================================
+
+struct CohereModelInfo {
+    name: &'static str,
+    dir_name: &'static str,
+    size_mb: u32,
+    description: &'static str,
+    languages: &'static str,
+    files: &'static [(&'static str, &'static str)],
+    huggingface_repo: &'static str,
+}
+
+const COHERE_MODELS: &[CohereModelInfo] = &[CohereModelInfo {
+    name: "cohere-transcribe-onnx-int8",
+    dir_name: "cohere-transcribe-onnx-int8",
+    size_mb: 2750,
+    description: "2B Conformer encoder-decoder, int8",
+    languages: "14 langs",
+    files: &[
+        ("cohere-encoder.int8.onnx", "cohere-encoder.int8.onnx"),
+        (
+            "cohere-encoder.int8.onnx.data",
+            "cohere-encoder.int8.onnx.data",
+        ),
+        ("cohere-decoder.int8.onnx", "cohere-decoder.int8.onnx"),
+        ("tokens.txt", "tokens.txt"),
+    ],
+    huggingface_repo: "tristanripke/cohere-transcribe-onnx-int8",
+}];
 
 // =============================================================================
 // Whisper Model Functions
@@ -484,6 +541,8 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     let is_paraformer_engine = matches!(config.engine, TranscriptionEngine::Paraformer);
     let is_dolphin_engine = matches!(config.engine, TranscriptionEngine::Dolphin);
     let is_omnilingual_engine = matches!(config.engine, TranscriptionEngine::Omnilingual);
+    let is_qwen3_asr_engine = matches!(config.engine, TranscriptionEngine::Qwen3Asr);
+    let is_cohere_engine = matches!(config.engine, TranscriptionEngine::Cohere);
     let current_whisper_model = &config.whisper.model;
     let current_parakeet_model = config.parakeet.as_ref().map(|p| p.model.as_str());
     let current_moonshine_model = config.moonshine.as_ref().map(|m| m.model.as_str());
@@ -491,12 +550,16 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     let current_paraformer_model = config.paraformer.as_ref().map(|p| p.model.as_str());
     let current_dolphin_model = config.dolphin.as_ref().map(|d| d.model.as_str());
     let current_omnilingual_model = config.omnilingual.as_ref().map(|o| o.model.as_str());
+    let current_qwen3_asr_model = config.qwen3_asr.as_ref().map(|q| q.model.as_str());
+    let current_cohere_model = config.cohere.as_ref().map(|c| c.model.as_str());
     let parakeet_available = cfg!(feature = "parakeet");
     let moonshine_available = cfg!(feature = "moonshine");
     let sensevoice_available = cfg!(feature = "sensevoice");
     let paraformer_available = cfg!(feature = "paraformer");
     let dolphin_available = cfg!(feature = "dolphin");
     let omnilingual_available = cfg!(feature = "omnilingual");
+    let qwen3_asr_available = cfg!(feature = "qwen3asr");
+    let cohere_available = cfg!(feature = "cohere");
     let whisper_count = MODELS.len();
     let parakeet_count = PARAKEET_MODELS.len();
     let moonshine_count = MOONSHINE_MODELS.len();
@@ -504,6 +567,8 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     let paraformer_count = PARAFORMER_MODELS.len();
     let dolphin_count = DOLPHIN_MODELS.len();
     let omnilingual_count = OMNILINGUAL_MODELS.len();
+    let qwen3_asr_count = QWEN3_ASR_MODELS.len();
+    let cohere_count = COHERE_MODELS.len();
 
     let available_count = |available: bool, count: usize| if available { count } else { 0 };
     let total_count = whisper_count
@@ -512,7 +577,9 @@ pub async fn interactive_select() -> anyhow::Result<()> {
         + available_count(sensevoice_available, sensevoice_count)
         + available_count(paraformer_available, paraformer_count)
         + available_count(dolphin_available, dolphin_count)
-        + available_count(omnilingual_available, omnilingual_count);
+        + available_count(omnilingual_available, omnilingual_count)
+        + available_count(qwen3_asr_available, qwen3_asr_count)
+        + available_count(cohere_available, cohere_count);
 
     // --- Whisper Section ---
     println!("--- Whisper (OpenAI, 99+ languages) ---\n");
@@ -660,8 +727,8 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     }
 
     // --- Paraformer Section ---
-    let paraformer_offset = sensevoice_offset
-        + available_count(sensevoice_available, sensevoice_count);
+    let paraformer_offset =
+        sensevoice_offset + available_count(sensevoice_available, sensevoice_count);
     println!("\n--- Paraformer (FunASR, Chinese + English) ---\n");
 
     if paraformer_available {
@@ -694,8 +761,8 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     }
 
     // --- Dolphin Section ---
-    let dolphin_offset = paraformer_offset
-        + available_count(paraformer_available, paraformer_count);
+    let dolphin_offset =
+        paraformer_offset + available_count(paraformer_available, paraformer_count);
     println!("\n--- Dolphin (dictation-optimized CTC) ---\n");
 
     if dolphin_available {
@@ -728,8 +795,7 @@ pub async fn interactive_select() -> anyhow::Result<()> {
     }
 
     // --- Omnilingual Section ---
-    let omnilingual_offset = dolphin_offset
-        + available_count(dolphin_available, dolphin_count);
+    let omnilingual_offset = dolphin_offset + available_count(dolphin_available, dolphin_count);
     println!("\n--- Omnilingual (FunASR, 50+ languages) ---\n");
 
     if omnilingual_available {
@@ -759,6 +825,73 @@ pub async fn interactive_select() -> anyhow::Result<()> {
         }
     } else {
         println!("  \x1b[90m(not available - rebuild with --features omnilingual)\x1b[0m");
+    }
+
+    // --- Qwen3-ASR Section ---
+    let qwen3_asr_offset =
+        omnilingual_offset + available_count(omnilingual_available, omnilingual_count);
+    println!("\n--- Qwen3-ASR (Qwen3 encoder-decoder, multilingual) ---\n");
+
+    if qwen3_asr_available {
+        for (i, model) in QWEN3_ASR_MODELS.iter().enumerate() {
+            let model_path = models_dir.join(model.dir_name);
+            let installed = model_path.exists() && validate_qwen3_asr_model(&model_path).is_ok();
+
+            let is_current = is_qwen3_asr_engine && current_qwen3_asr_model == Some(model.name);
+            let star = if is_current { "*" } else { " " };
+
+            let status = if installed {
+                "\x1b[32m[installed]\x1b[0m"
+            } else {
+                ""
+            };
+
+            println!(
+                " {}[{:>2}] {:<20} ({:>4} MB) {} - {} {}",
+                star,
+                qwen3_asr_offset + i + 1,
+                model.dir_name,
+                model.size_mb,
+                model.languages,
+                model.description,
+                status
+            );
+        }
+    } else {
+        println!("  \x1b[90m(not available - rebuild with --features qwen3asr)\x1b[0m");
+    }
+
+    // --- Cohere Transcribe Section ---
+    let cohere_offset = qwen3_asr_offset + available_count(qwen3_asr_available, qwen3_asr_count);
+    println!("\n--- Cohere Transcribe (Conformer encoder-decoder, multilingual) ---\n");
+
+    if cohere_available {
+        for (i, model) in COHERE_MODELS.iter().enumerate() {
+            let model_path = models_dir.join(model.dir_name);
+            let installed = model_path.exists() && validate_cohere_model(&model_path).is_ok();
+
+            let is_current = is_cohere_engine && current_cohere_model == Some(model.name);
+            let star = if is_current { "*" } else { " " };
+
+            let status = if installed {
+                "\x1b[32m[installed]\x1b[0m"
+            } else {
+                ""
+            };
+
+            println!(
+                " {}[{:>2}] {:<28} ({:>4} MB) {} - {} {}",
+                star,
+                cohere_offset + i + 1,
+                model.dir_name,
+                model.size_mb,
+                model.languages,
+                model.description,
+                status
+            );
+        }
+    } else {
+        println!("  \x1b[90m(not available - rebuild with --features cohere)\x1b[0m");
     }
 
     println!("\n  [ 0] Cancel\n");
@@ -791,13 +924,64 @@ pub async fn interactive_select() -> anyhow::Result<()> {
         handle_sensevoice_selection(sensevoice_index).await
     } else if paraformer_available && selection <= paraformer_offset + paraformer_count {
         let idx = selection - paraformer_offset;
-        handle_onnx_engine_selection("paraformer", PARAFORMER_MODELS.iter().map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo)).collect(), idx, validate_onnx_ctc_model).await
+        handle_onnx_engine_selection(
+            "paraformer",
+            PARAFORMER_MODELS
+                .iter()
+                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
+                .collect(),
+            idx,
+            validate_onnx_ctc_model,
+        )
+        .await
     } else if dolphin_available && selection <= dolphin_offset + dolphin_count {
         let idx = selection - dolphin_offset;
-        handle_onnx_engine_selection("dolphin", DOLPHIN_MODELS.iter().map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo)).collect(), idx, validate_onnx_ctc_model).await
+        handle_onnx_engine_selection(
+            "dolphin",
+            DOLPHIN_MODELS
+                .iter()
+                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
+                .collect(),
+            idx,
+            validate_onnx_ctc_model,
+        )
+        .await
     } else if omnilingual_available && selection <= omnilingual_offset + omnilingual_count {
         let idx = selection - omnilingual_offset;
-        handle_onnx_engine_selection("omnilingual", OMNILINGUAL_MODELS.iter().map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo)).collect(), idx, validate_onnx_ctc_model).await
+        handle_onnx_engine_selection(
+            "omnilingual",
+            OMNILINGUAL_MODELS
+                .iter()
+                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
+                .collect(),
+            idx,
+            validate_onnx_ctc_model,
+        )
+        .await
+    } else if qwen3_asr_available && selection <= qwen3_asr_offset + qwen3_asr_count {
+        let idx = selection - qwen3_asr_offset;
+        handle_onnx_engine_selection(
+            "qwen3asr",
+            QWEN3_ASR_MODELS
+                .iter()
+                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
+                .collect(),
+            idx,
+            validate_qwen3_asr_model,
+        )
+        .await
+    } else if cohere_available && selection <= cohere_offset + cohere_count {
+        let idx = selection - cohere_offset;
+        handle_onnx_engine_selection(
+            "cohere",
+            COHERE_MODELS
+                .iter()
+                .map(|m| (m.name, m.dir_name, m.size_mb, m.files, m.huggingface_repo))
+                .collect(),
+            idx,
+            validate_cohere_model,
+        )
+        .await
     } else {
         println!("\nInvalid selection.");
         Ok(())
@@ -1069,7 +1253,8 @@ const GTCRN_MODEL_URL: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/do
 const GTCRN_MODEL_FILENAME: &str = "gtcrn_simple.onnx";
 
 /// ECAPA-TDNN speaker embedding model URL and filename
-const ECAPA_MODEL_URL: &str = "https://huggingface.co/pranjal-pravesh/ecapa_tdnn_onnx/resolve/main/ecapa_tdnn.onnx";
+const ECAPA_MODEL_URL: &str =
+    "https://huggingface.co/pranjal-pravesh/ecapa_tdnn_onnx/resolve/main/ecapa_tdnn.onnx";
 const ECAPA_MODEL_FILENAME: &str = "ecapa_tdnn.onnx";
 
 /// Ensure the GTCRN speech enhancement model is downloaded.
@@ -1937,8 +2122,7 @@ pub fn validate_sensevoice_model(path: &Path) -> anyhow::Result<()> {
         anyhow::bail!("Model directory does not exist: {:?}", path);
     }
 
-    let has_model =
-        path.join("model.int8.onnx").exists() || path.join("model.onnx").exists();
+    let has_model = path.join("model.int8.onnx").exists() || path.join("model.onnx").exists();
     let has_tokens = path.join("tokens.txt").exists();
 
     if has_model && has_tokens {
@@ -2176,7 +2360,7 @@ pub fn list_installed_sensevoice() {
 }
 
 // =============================================================================
-// Generic ONNX Engine Functions (Paraformer, Dolphin, Omnilingual)
+// Generic ONNX Engine Functions (Paraformer, Dolphin, Omnilingual, Qwen3-ASR, Cohere)
 // =============================================================================
 
 /// Validate a CTC-based ONNX model directory (model.int8.onnx or model.onnx + tokens.txt)
@@ -2199,6 +2383,78 @@ fn validate_onnx_ctc_model(path: &Path) -> anyhow::Result<()> {
             missing.push("tokens.txt");
         }
         anyhow::bail!("Incomplete model, missing: {}", missing.join(", "))
+    }
+}
+
+/// Validate a Qwen3-ASR ONNX model directory.
+fn validate_qwen3_asr_model(path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("Model directory does not exist: {:?}", path);
+    }
+
+    let has_int4 = path.join("encoder.int4.onnx").exists()
+        && path.join("decoder_init.int4.onnx").exists()
+        && path.join("decoder_step.int4.onnx").exists()
+        && path.join("decoder_weights.int4.data").exists();
+    let has_fp32 = path.join("encoder.onnx").exists()
+        && path.join("decoder_init.onnx").exists()
+        && path.join("decoder_step.onnx").exists()
+        && path.join("decoder_weights.data").exists();
+    let has_embeddings = path.join("embed_tokens.bin").exists();
+    let has_config = path.join("config.json").exists();
+    let has_tokenizer = path.join("tokenizer.json").exists();
+
+    if (has_int4 || has_fp32) && has_embeddings && has_config && has_tokenizer {
+        Ok(())
+    } else {
+        let mut missing = Vec::new();
+        if !has_int4 && !has_fp32 {
+            missing.push("Qwen3-ASR ONNX split files");
+        }
+        if !has_embeddings {
+            missing.push("embed_tokens.bin");
+        }
+        if !has_config {
+            missing.push("config.json");
+        }
+        if !has_tokenizer {
+            missing.push("tokenizer.json");
+        }
+        anyhow::bail!(
+            "Incomplete Qwen3-ASR model, missing: {}",
+            missing.join(", ")
+        )
+    }
+}
+
+/// Validate a Cohere Transcribe ONNX model directory.
+fn validate_cohere_model(path: &Path) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("Model directory does not exist: {:?}", path);
+    }
+
+    let has_encoder = path.join("cohere-encoder.int8.onnx").exists()
+        && path.join("cohere-encoder.int8.onnx.data").exists();
+    let has_decoder = path.join("cohere-decoder.int8.onnx").exists();
+    let has_tokens = path.join("tokens.txt").exists();
+
+    if has_encoder && has_decoder && has_tokens {
+        Ok(())
+    } else {
+        let mut missing = Vec::new();
+        if !has_encoder {
+            missing.push("cohere-encoder.int8.onnx + .data");
+        }
+        if !has_decoder {
+            missing.push("cohere-decoder.int8.onnx");
+        }
+        if !has_tokens {
+            missing.push("tokens.txt");
+        }
+        anyhow::bail!(
+            "Incomplete Cohere Transcribe model, missing: {}",
+            missing.join(", ")
+        )
     }
 }
 
@@ -2254,7 +2510,10 @@ async fn handle_onnx_engine_selection(
 
     // Validate
     validate_fn(&model_path)?;
-    print_success(&format!("Model '{}' downloaded to {:?}", dir_name, model_path));
+    print_success(&format!(
+        "Model '{}' downloaded to {:?}",
+        dir_name, model_path
+    ));
 
     // Update config and restart daemon
     update_config_engine(engine_name, name)?;
@@ -2285,10 +2544,7 @@ fn download_onnx_model(
             continue;
         }
 
-        let url = format!(
-            "https://huggingface.co/{}/resolve/main/{}",
-            repo, repo_path
-        );
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, repo_path);
 
         println!("Downloading {}...", local_filename);
 
@@ -2346,7 +2602,11 @@ fn update_config_engine(engine_name: &str, model_name: &str) -> anyhow::Result<(
 
 /// Update a config string to use a specific engine and model
 fn update_engine_in_config(config: &str, engine_name: &str, model_name: &str) -> String {
-    let section_name = format!("[{}]", engine_name);
+    let config_section = match engine_name {
+        "qwen3asr" => "qwen3_asr",
+        other => other,
+    };
+    let section_name = format!("[{}]", config_section);
     let mut result = String::new();
     let mut has_engine_line = false;
     let mut has_section = false;
@@ -2403,7 +2663,10 @@ fn update_engine_in_config(config: &str, engine_name: &str, model_name: &str) ->
     }
 
     if !has_section {
-        result.push_str(&format!("\n[{}]\nmodel = \"{}\"\n", engine_name, model_name));
+        result.push_str(&format!(
+            "\n[{}]\nmodel = \"{}\"\n",
+            config_section, model_name
+        ));
     }
 
     if !config.ends_with('\n') && result.ends_with('\n') {
@@ -2995,5 +3258,20 @@ mode = "type"
                 model.dir_name
             );
         }
+    }
+
+    #[test]
+    fn test_update_engine_in_config_uses_qwen3_asr_section() {
+        let config = r#"engine = "whisper"
+
+[whisper]
+model = "base.en"
+"#;
+        let result = update_engine_in_config(config, "qwen3asr", "qwen3-asr-1.7b");
+
+        assert!(result.contains(r#"engine = "qwen3asr""#));
+        assert!(result.contains("[qwen3_asr]"));
+        assert!(result.contains(r#"model = "qwen3-asr-1.7b""#));
+        assert!(!result.contains("[qwen3asr]"));
     }
 }

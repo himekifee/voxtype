@@ -3,11 +3,14 @@
 //! Provides VAD to filter silence-only recordings before transcription,
 //! preventing Whisper hallucinations when processing silence.
 //!
-//! Two backends are available:
+//! Three backends are available:
 //! - **Energy VAD**: Simple RMS-based detection, no model needed, fast
 //! - **Whisper VAD**: Silero model via whisper-rs, more accurate, requires model download
+//! - **ONNX VAD**: Whisper encoder-decoder VAD model via ONNX Runtime
 
 mod energy;
+#[cfg(feature = "vad-onnx")]
+mod onnx_vad;
 mod whisper_vad;
 
 use crate::config::{Config, TranscriptionEngine, VadBackend};
@@ -15,6 +18,8 @@ use crate::error::VadError;
 use std::path::PathBuf;
 
 pub use energy::EnergyVad;
+#[cfg(feature = "vad-onnx")]
+pub use onnx_vad::OnnxVad;
 pub use whisper_vad::WhisperVad;
 
 /// Result of voice activity detection
@@ -54,7 +59,7 @@ pub fn create_vad(config: &Config) -> Result<Option<Box<dyn VoiceActivityDetecto
     // Determine which backend to use
     let backend = match config.vad.backend {
         VadBackend::Auto => {
-            // Auto-select: Whisper VAD for Whisper engine, Energy for Parakeet
+            // Auto-select: Whisper VAD for Whisper, Energy for ONNX ASR engines.
             match config.engine {
                 TranscriptionEngine::Whisper => VadBackend::Whisper,
                 TranscriptionEngine::Parakeet
@@ -62,7 +67,9 @@ pub fn create_vad(config: &Config) -> Result<Option<Box<dyn VoiceActivityDetecto
                 | TranscriptionEngine::SenseVoice
                 | TranscriptionEngine::Paraformer
                 | TranscriptionEngine::Dolphin
-                | TranscriptionEngine::Omnilingual => VadBackend::Energy,
+                | TranscriptionEngine::Omnilingual
+                | TranscriptionEngine::Qwen3Asr
+                | TranscriptionEngine::Cohere => VadBackend::Energy,
             }
         }
         explicit => explicit,
@@ -77,6 +84,21 @@ pub fn create_vad(config: &Config) -> Result<Option<Box<dyn VoiceActivityDetecto
             let model_path = resolve_whisper_vad_model_path(&config.vad)?;
             tracing::info!("Using Whisper VAD backend with model {:?}", model_path);
             Box::new(WhisperVad::new(&model_path, &config.vad)?)
+        }
+        VadBackend::Onnx => {
+            #[cfg(feature = "vad-onnx")]
+            {
+                let model_path = resolve_onnx_vad_model_path(&config.vad)?;
+                tracing::info!("Using ONNX VAD backend with model {:?}", model_path);
+                Box::new(OnnxVad::new(&model_path, &config.vad)?)
+            }
+            #[cfg(not(feature = "vad-onnx"))]
+            {
+                return Err(VadError::InitFailed(
+                    "ONNX VAD backend requested but voxtype was not compiled with --features vad-onnx"
+                        .to_string(),
+                ));
+            }
         }
     };
 
@@ -108,6 +130,29 @@ fn resolve_whisper_vad_model_path(config: &crate::config::VadConfig) -> Result<P
     }
 }
 
+/// Resolve the path to the ONNX VAD model
+#[cfg(feature = "vad-onnx")]
+fn resolve_onnx_vad_model_path(config: &crate::config::VadConfig) -> Result<PathBuf, VadError> {
+    if let Some(ref model) = config.model {
+        let path = PathBuf::from(model);
+        if path.exists() {
+            return Ok(path);
+        }
+        return Err(VadError::ModelNotFound(model.clone()));
+    }
+
+    let model_dir = Config::models_dir().join(get_onnx_vad_model_dirname());
+    let model_file = model_dir.join(get_onnx_vad_model_filename());
+    if model_file.exists() {
+        Ok(model_dir)
+    } else {
+        Err(VadError::ModelNotFound(format!(
+            "{}. Download with: voxtype setup vad --onnx",
+            model_file.display()
+        )))
+    }
+}
+
 /// Get the download URL for the Whisper VAD model
 pub fn get_whisper_vad_model_url() -> &'static str {
     "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin"
@@ -116,6 +161,21 @@ pub fn get_whisper_vad_model_url() -> &'static str {
 /// Get the default VAD model filename
 pub fn get_whisper_vad_model_filename() -> &'static str {
     "ggml-silero-vad.bin"
+}
+
+/// Get the download URL for the ONNX VAD model
+pub fn get_onnx_vad_model_url() -> &'static str {
+    "https://huggingface.co/TransWithAI/Whisper-Vad-EncDec-ASMR-onnx/resolve/main/model.onnx"
+}
+
+/// Get the default ONNX VAD model directory
+pub fn get_onnx_vad_model_dirname() -> &'static str {
+    "whisper-vad-encdec-asmr-onnx"
+}
+
+/// Get the ONNX VAD model filename
+pub fn get_onnx_vad_model_filename() -> &'static str {
+    "model.onnx"
 }
 
 #[cfg(test)]
@@ -169,5 +229,12 @@ mod tests {
         let url = get_whisper_vad_model_url();
         assert!(url.contains("huggingface"));
         assert!(url.contains("silero"));
+    }
+
+    #[test]
+    fn test_onnx_vad_model_url() {
+        let url = get_onnx_vad_model_url();
+        assert!(url.contains("huggingface"));
+        assert!(url.contains("Whisper-Vad-EncDec-ASMR-onnx"));
     }
 }
